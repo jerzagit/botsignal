@@ -35,3 +35,17 @@ CREATE TABLE IF NOT EXISTS trades (
     FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
         ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS guard_events (
+    id             INT           AUTO_INCREMENT PRIMARY KEY,
+    fired_at       DATETIME      DEFAULT CURRENT_TIMESTAMP,
+    guard_name     VARCHAR(32)   NOT NULL,
+    signal_id      VARCHAR(64),
+    symbol         VARCHAR(20),
+    direction      VARCHAR(4),
+    reason         TEXT,
+    value_actual   VARCHAR(64),
+    value_required VARCHAR(64),
+    INDEX idx_fired_at   (fired_at),
+    INDEX idx_guard_name (guard_name)
+);

@@ -21,6 +21,18 @@ log = logging.getLogger(__name__)
 TRADE_LOG = Path("data/trades.json")
 
 
+def _fire_guard(guard_name: str, signal: Signal, signal_id: str,
+                reason: str, actual: str = "", required: str = ""):
+    """Write a guard block event to the DB (best-effort, never raises)."""
+    try:
+        from core.db import record_guard_event
+        record_guard_event(guard_name, signal_id or "",
+                           signal.symbol, signal.direction,
+                           reason, actual, required)
+    except Exception as e:
+        log.warning(f"_fire_guard log failed: {e}")
+
+
 # ── Connection ────────────────────────────────────────────────────────────────
 
 def mt5_connect() -> bool:
@@ -73,6 +85,9 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
     # ── GUARD 2: Margin level — must be above MIN_MARGIN_LEVEL ───────────────
     # Skipped when margin=0 (no open trades yet — first trade always allowed)
     if account.margin > 0 and account.margin_level < MIN_MARGIN_LEVEL:
+        _fire_guard("margin", signal, signal_id,
+                    "Margin level too low",
+                    f"{account.margin_level:.1f}%", f"≥{MIN_MARGIN_LEVEL:.0f}%")
         mt5.shutdown()
         return (
             f"❌ *Trade blocked — margin level too low*\n"
@@ -90,6 +105,9 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
         # Filter out breakeven positions (SL moved to entry price)
         at_risk   = [p for p in stacked if round(p.sl, 2) != round(p.price_open, 2)]
         if at_risk:
+            _fire_guard("stack", signal, signal_id,
+                        f"{len(at_risk)} same-direction position(s) at risk",
+                        f"{len(at_risk)} at risk", "0 at risk")
             mt5.shutdown()
             return (
                 f"⚠️ *Trade blocked — already have {len(at_risk)} "
@@ -128,9 +146,12 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
     tp_distance = abs(effective_tps[0] - signal.entry_mid) if effective_tps else 0
     rr_ratio    = tp_distance / sl_distance if sl_distance > 0 else 0
     if rr_ratio < MIN_RR_RATIO:
-        mt5.shutdown()
         sl_pips = sl_distance / SL_PIP_SIZE
         tp_pips = tp_distance / SL_PIP_SIZE
+        _fire_guard("rr_ratio", signal, signal_id,
+                    f"RR ratio too low — SL {sl_pips:.0f}p / TP {tp_pips:.0f}p",
+                    f"{rr_ratio:.2f}:1", f"≥{MIN_RR_RATIO:.1f}:1")
+        mt5.shutdown()
         return (
             f"⚠️ *Trade blocked — poor reward:risk ratio*\n"
             f"SL: `{sl_pips:.0f} pips` | TP1: `{tp_pips:.0f} pips` | "
@@ -159,6 +180,9 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
     # ── GUARD 5: Spread — block if broker spread is unusually wide ───────────
     spread_pips = (tick.ask - tick.bid) / SL_PIP_SIZE
     if spread_pips > MAX_SPREAD_PIPS:
+        _fire_guard("spread", signal, signal_id,
+                    "Spread too wide",
+                    f"{spread_pips:.1f} pips", f"≤{MAX_SPREAD_PIPS:.0f} pips")
         mt5.shutdown()
         return (
             f"⏳ *Trade blocked — spread too wide*\n"
@@ -170,6 +194,9 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
     distance_pts  = max(0.0, max(signal.entry_low - price, price - signal.entry_high))
     distance_pips = distance_pts / SL_PIP_SIZE
     if distance_pips > ENTRY_MAX_DISTANCE_PIPS:
+        _fire_guard("proximity", signal, signal_id,
+                    f"Price {price} too far from zone {signal.entry_low}–{signal.entry_high}",
+                    f"{distance_pips:.0f} pips away", f"≤{ENTRY_MAX_DISTANCE_PIPS} pips")
         mt5.shutdown()
         zone_str = (
             f"{signal.entry_low}"
@@ -186,6 +213,8 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
     # Auto lot size from risk %
     lot, lot_explanation = calculate_lot(signal)
     if lot == 0.0:
+        _fire_guard("lot_calc", signal, signal_id,
+                    lot_explanation, "0.00 lot", f"≥{MIN_LOT}")
         mt5.shutdown()
         return f"❌ Lot calculation failed:\n{lot_explanation}"
 

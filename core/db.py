@@ -112,6 +112,25 @@ def ensure_manual_trade(ticket: int, symbol: str, direction: str,
         log.error(f"db.ensure_manual_trade failed: {e}")
 
 
+def record_guard_event(guard_name: str, signal_id: str, symbol: str,
+                       direction: str, reason: str,
+                       value_actual: str = "", value_required: str = ""):
+    """Log a guard block event so the dashboard can show why a trade was rejected."""
+    sql = """
+        INSERT INTO guard_events
+            (guard_name, signal_id, symbol, direction, reason, value_actual, value_required)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute(sql, (guard_name, signal_id, symbol, direction,
+                              reason, value_actual, value_required))
+        conn.close()
+    except Exception as e:
+        log.error(f"db.record_guard_event failed: {e}")
+
+
 def update_trade_outcome(ticket: int, outcome: str, close_price: float,
                          closed_at, profit: float):
     """Called by the win/loss poller when an MT5 position is found closed."""

@@ -73,6 +73,49 @@
     .tps { color: #555; }
     .empty { text-align: center; padding: 40px; color: #aaa; }
 
+    /* ── Guards section ───────────────────────────────── */
+    .guards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .guard-card {
+      background: white; border-radius: 10px; padding: 14px 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+      border-left: 4px solid #e5e7eb;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .guard-card.pass  { border-left-color: #16a34a; }
+    .guard-card.block { border-left-color: #dc2626; }
+    .guard-card.info  { border-left-color: #2563eb; }
+    .guard-card .g-title { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #374151; }
+    .guard-card .g-threshold { font-size: 0.8rem; color: #6b7280; }
+    .guard-card .g-live { font-size: 1rem; font-weight: 700; margin-top: 4px; }
+    .guard-card .g-live.ok  { color: #16a34a; }
+    .guard-card .g-live.bad { color: #dc2626; }
+    .guard-card .g-live.na  { color: #9ca3af; font-weight: 400; font-size: 0.8rem; }
+    .guard-card .g-status { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.5px; }
+    .guard-card .g-status.ok  { color: #16a34a; }
+    .guard-card .g-status.bad { color: #dc2626; }
+
+    .account-bar {
+      background: white; border-radius: 10px; padding: 14px 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+      display: flex; gap: 32px; align-items: center; margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .account-bar .item { display: flex; flex-direction: column; }
+    .account-bar .item .lbl { font-size: 0.72rem; color: #888; text-transform: uppercase; }
+    .account-bar .item .val { font-size: 1rem; font-weight: 600; }
+
+    .badge.margin  { background: #fee2e2; color: #b91c1c; }
+    .badge.stack   { background: #fef9c3; color: #854d0e; }
+    .badge.rr_ratio  { background: #ede9fe; color: #6d28d9; }
+    .badge.spread  { background: #ffedd5; color: #c2410c; }
+    .badge.proximity { background: #dbeafe; color: #1d4ed8; }
+    .badge.lot_calc  { background: #f3f4f6; color: #6b7280; }
+
     @media (max-width: 700px) {
       table { font-size: 0.75rem; }
       th, td { padding: 8px 6px; }
@@ -130,6 +173,89 @@
       <span class="lbl">Total P&L</span>
       <span class="val" id="total-profit">—</span>
     </div>
+  </div>
+
+  <!-- ── Guards Section ──────────────────────────────────────── -->
+  <div class="section-title" style="margin-top:8px;">Trade Guards</div>
+
+  <!-- Live account health -->
+  <div class="account-bar" id="account-bar">
+    <div class="item"><span class="lbl">Balance</span><span class="val" id="acc-balance">—</span></div>
+    <div class="item"><span class="lbl">Equity</span><span class="val" id="acc-equity">—</span></div>
+    <div class="item"><span class="lbl">Free Margin</span><span class="val" id="acc-free">—</span></div>
+    <div class="item"><span class="lbl">Margin Level</span><span class="val" id="acc-margin-level">—</span></div>
+    <div class="item"><span class="lbl">XAUUSD Spread</span><span class="val" id="acc-spread">—</span></div>
+  </div>
+
+  <!-- Guard cards (6 guards + 2 info cards) -->
+  <div class="guards-grid" id="guards-grid">
+    <div class="guard-card" id="gc-margin">
+      <div class="g-title">Guard 1 · Margin Level</div>
+      <div class="g-threshold" id="gc-margin-thresh">—</div>
+      <div class="g-live na" id="gc-margin-live">Loading…</div>
+      <div class="g-status" id="gc-margin-status"></div>
+    </div>
+    <div class="guard-card" id="gc-stack">
+      <div class="g-title">Guard 2 · Direction Stack</div>
+      <div class="g-threshold" id="gc-stack-thresh">—</div>
+      <div class="g-live na" id="gc-stack-live">—</div>
+      <div class="g-status" id="gc-stack-status"></div>
+    </div>
+    <div class="guard-card" id="gc-rr_ratio">
+      <div class="g-title">Guard 3 · RR Ratio</div>
+      <div class="g-threshold" id="gc-rr_ratio-thresh">—</div>
+      <div class="g-live na" id="gc-rr_ratio-live">Signal dependent</div>
+      <div class="g-status" id="gc-rr_ratio-status"></div>
+    </div>
+    <div class="guard-card" id="gc-spread">
+      <div class="g-title">Guard 4 · Spread</div>
+      <div class="g-threshold" id="gc-spread-thresh">—</div>
+      <div class="g-live na" id="gc-spread-live">Loading…</div>
+      <div class="g-status" id="gc-spread-status"></div>
+    </div>
+    <div class="guard-card" id="gc-proximity">
+      <div class="g-title">Guard 5 · Entry Proximity</div>
+      <div class="g-threshold" id="gc-proximity-thresh">—</div>
+      <div class="g-live na" id="gc-proximity-live">Signal dependent</div>
+      <div class="g-status" id="gc-proximity-status"></div>
+    </div>
+    <div class="guard-card" id="gc-lot_calc">
+      <div class="g-title">Guard 6 · Lot Calculation</div>
+      <div class="g-threshold" id="gc-lot_calc-thresh">—</div>
+      <div class="g-live na" id="gc-lot_calc-live">Calculated per signal</div>
+      <div class="g-status" id="gc-lot_calc-status"></div>
+    </div>
+    <div class="guard-card info">
+      <div class="g-title">Risk per Trade</div>
+      <div class="g-threshold" id="gc-risk-thresh">—</div>
+      <div class="g-live na">Applied to free margin</div>
+    </div>
+    <div class="guard-card info">
+      <div class="g-title">Auto TP Enforcement</div>
+      <div class="g-threshold" id="gc-autotp-thresh">—</div>
+      <div class="g-live na">Applied per signal</div>
+    </div>
+  </div>
+
+  <!-- Guard fire log -->
+  <div class="section-title">Guard Fire Log</div>
+  <div class="table-wrap" style="margin-bottom:28px;">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Guard</th>
+          <th>Symbol</th>
+          <th>Direction</th>
+          <th>Actual</th>
+          <th>Required</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+      <tbody id="guard-log-body">
+        <tr><td colspan="7" class="empty">Loading…</td></tr>
+      </tbody>
+    </table>
   </div>
 
   <!-- Signal Log Table -->
@@ -247,9 +373,150 @@
       });
   }
 
+  // ── Guard label map ──────────────────────────────────────────────
+  const GUARD_LABELS = {
+    margin:    'Margin Level',
+    stack:     'Direction Stack',
+    rr_ratio:  'RR Ratio',
+    spread:    'Spread',
+    proximity: 'Proximity',
+    lot_calc:  'Lot Calc',
+  };
+
+  function guardBadge(name) {
+    const label = GUARD_LABELS[name] || name;
+    return `<span class="badge ${name}">${label}</span>`;
+  }
+
+  function dirBadgeSmall(d) {
+    if (!d) return '—';
+    return `<span class="badge ${d}">${d.toUpperCase()}</span>`;
+  }
+
+  // ── Load guard configuration ─────────────────────────────────────
+  function loadGuardConfig() {
+    fetch('/api/guards/config')
+      .then(r => r.json())
+      .then(d => {
+        const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+        set('gc-margin-thresh',    d.margin?.threshold    || '—');
+        set('gc-stack-thresh',     d.stack?.threshold     || '—');
+        set('gc-rr_ratio-thresh',  d.rr_ratio?.threshold  || '—');
+        set('gc-spread-thresh',    d.spread?.threshold    || '—');
+        set('gc-proximity-thresh', d.proximity?.threshold || '—');
+        set('gc-lot_calc-thresh',  d.lot_calc?.threshold  || '—');
+        set('gc-risk-thresh',      d.risk?.threshold      || '—');
+        set('gc-autotp-thresh',    d.auto_tp?.threshold   || '—');
+
+        // Stack guard: grey out if disabled
+        if (d.stack && !d.stack.enabled) {
+          document.getElementById('gc-stack').classList.add('info');
+          set('gc-stack-live', 'Disabled');
+          set('gc-stack-status', '');
+        }
+      });
+  }
+
+  // ── Load live MT5 account health ──────────────────────────────────
+  function loadGuardLive() {
+    fetch('/api/guards/live')
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) {
+          document.getElementById('acc-balance').textContent = 'MT5 offline';
+          return;
+        }
+
+        // Account bar
+        document.getElementById('acc-balance').textContent     = d.balance !== null ? '$' + d.balance.toLocaleString(undefined, {minimumFractionDigits:2}) : '—';
+        document.getElementById('acc-equity').textContent      = d.equity  !== null ? '$' + d.equity.toLocaleString(undefined,  {minimumFractionDigits:2}) : '—';
+        document.getElementById('acc-free').textContent        = d.free_margin !== null ? '$' + d.free_margin.toLocaleString(undefined, {minimumFractionDigits:2}) : '—';
+
+        const mlEl = document.getElementById('acc-margin-level');
+        if (d.margin_level !== null) {
+          mlEl.textContent = d.margin_level + '%';
+          mlEl.style.color = d.margin_level_ok ? '#16a34a' : '#dc2626';
+        } else {
+          mlEl.textContent = 'No open trades';
+          mlEl.style.color = '#16a34a';
+        }
+
+        const spEl = document.getElementById('acc-spread');
+        if (d.spread_pips !== null) {
+          spEl.textContent = d.spread_pips + ' pips';
+          spEl.style.color = d.spread_ok ? '#16a34a' : '#dc2626';
+        } else {
+          spEl.textContent = '—';
+        }
+
+        // Margin guard card
+        const mgCard  = document.getElementById('gc-margin');
+        const mgLive  = document.getElementById('gc-margin-live');
+        const mgStat  = document.getElementById('gc-margin-status');
+        if (d.margin_level !== null) {
+          mgLive.textContent  = d.margin_level + '%';
+          mgLive.className    = 'g-live ' + (d.margin_level_ok ? 'ok' : 'bad');
+          mgStat.textContent  = d.margin_level_ok ? '✓ PASS' : '✗ BLOCK';
+          mgStat.className    = 'g-status ' + (d.margin_level_ok ? 'ok' : 'bad');
+          mgCard.classList.add(d.margin_level_ok ? 'pass' : 'block');
+        } else {
+          mgLive.textContent = 'No open trades';
+          mgLive.className   = 'g-live ok';
+          mgStat.textContent = '✓ PASS';
+          mgStat.className   = 'g-status ok';
+          mgCard.classList.add('pass');
+        }
+
+        // Spread guard card
+        const spCard = document.getElementById('gc-spread');
+        const spLive = document.getElementById('gc-spread-live');
+        const spStat = document.getElementById('gc-spread-status');
+        if (d.spread_pips !== null) {
+          spLive.textContent = d.spread_pips + ' pips';
+          spLive.className   = 'g-live ' + (d.spread_ok ? 'ok' : 'bad');
+          spStat.textContent = d.spread_ok ? '✓ PASS' : '✗ BLOCK';
+          spStat.className   = 'g-status ' + (d.spread_ok ? 'ok' : 'bad');
+          spCard.classList.add(d.spread_ok ? 'pass' : 'block');
+        }
+      })
+      .catch(() => {
+        document.getElementById('acc-balance').textContent = 'MT5 offline';
+      });
+  }
+
+  // ── Load guard fire log ───────────────────────────────────────────
+  function loadGuardLog() {
+    fetch('/api/guards/log')
+      .then(r => r.json())
+      .then(rows => {
+        const tbody = document.getElementById('guard-log-body');
+        if (!rows.length) {
+          tbody.innerHTML = '<tr><td colspan="7" class="empty">No guard events yet — all signals have passed cleanly.</td></tr>';
+          return;
+        }
+        let html = '';
+        rows.forEach(g => {
+          html += `
+            <tr>
+              <td>${g.fired_at || '—'}</td>
+              <td>${guardBadge(g.guard_name)}</td>
+              <td><strong>${g.symbol || '—'}</strong></td>
+              <td>${dirBadgeSmall(g.direction)}</td>
+              <td style="color:#dc2626;font-weight:600">${g.value_actual || '—'}</td>
+              <td style="color:#16a34a">${g.value_required || '—'}</td>
+              <td style="color:#555;font-size:0.8rem">${g.reason || '—'}</td>
+            </tr>`;
+        });
+        tbody.innerHTML = html;
+      });
+  }
+
   function loadAll() {
     loadStats();
     loadSignals();
+    loadGuardConfig();
+    loadGuardLive();
+    loadGuardLog();
     document.getElementById('last-updated').textContent =
       'Last updated: ' + new Date().toLocaleTimeString();
   }
