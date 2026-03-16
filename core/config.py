@@ -43,6 +43,11 @@ WATCH_INTERVAL_SECS  = int(os.getenv("WATCH_INTERVAL_SECS",  "30"))   # how ofte
 # Number of profitable positions to keep running at breakeven when early TP fires
 BREAKEVEN_KEEP_COUNT = int(os.getenv("BREAKEVEN_KEEP_COUNT", "2"))
 
+# ── Trade split ───────────────────────────────────────────────────────────────
+# Split each signal into N equal positions so you can close them independently
+# e.g. 5 = five tickets of lot/5 each → close 1 at TP1, 1 at TP2, let rest run
+TRADE_SPLIT = int(os.getenv("TRADE_SPLIT", "1"))
+
 # ── Entry price proximity guard ───────────────────────────────────────────────
 # Max allowed distance (in pips) between current price and Hafiz's entry zone.
 # If price is further away than this, the trade is blocked — signal came too early.

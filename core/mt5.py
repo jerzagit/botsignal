@@ -12,7 +12,8 @@ import MetaTrader5 as mt5
 
 from core.config import MT5_PATH, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_SYMBOL_SUFFIX, \
                        SL_PIP_SIZE, ENTRY_MAX_DISTANCE_PIPS, MIN_MARGIN_LEVEL, \
-                       MAX_SPREAD_PIPS, MIN_RR_RATIO, BLOCK_SAME_DIRECTION_STACK
+                       MAX_SPREAD_PIPS, MIN_RR_RATIO, BLOCK_SAME_DIRECTION_STACK, \
+                       TRADE_SPLIT, MIN_LOT
 from core.signal import Signal
 from core.risk   import calculate_lot
 
@@ -159,48 +160,66 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
         mt5.shutdown()
         return f"❌ Lot calculation failed:\n{lot_explanation}"
 
-    request = {
-        "action":       mt5.TRADE_ACTION_DEAL,
-        "symbol":       symbol,
-        "volume":       lot,
-        "type":         order_type,
-        "price":        price,
-        "sl":           signal.sl,
-        "tp":           tp,
-        "deviation":    20,
-        "magic":        20250101,
-        "comment":      "SignalBot",
-        "type_time":    mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
-    }
+    # ── Split lot into TRADE_SPLIT equal positions ────────────────────────────
+    vol_step  = info.volume_step
+    split_lot = max(MIN_LOT, round(round(lot / TRADE_SPLIT / vol_step) * vol_step, 2))
 
-    result = mt5.order_send(request)
+    tickets = []
+    failed  = []
+
+    for i in range(TRADE_SPLIT):
+        # Assign TPs across splits — cycle through available TPs
+        split_tp = signal.tps[i % len(signal.tps)] if signal.tps else tp
+        req = {
+            "action":       mt5.TRADE_ACTION_DEAL,
+            "symbol":       symbol,
+            "volume":       split_lot,
+            "type":         order_type,
+            "price":        price,
+            "sl":           signal.sl,
+            "tp":           split_tp,
+            "deviation":    20,
+            "magic":        20250101,
+            "comment":      f"SignalBot {i+1}/{TRADE_SPLIT}",
+            "type_time":    mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        r = mt5.order_send(req)
+        if r.retcode == mt5.TRADE_RETCODE_DONE:
+            tickets.append((r.order, split_tp))
+        else:
+            failed.append(f"#{i+1}: {r.comment}")
+
     mt5.shutdown()
 
-    if result.retcode != mt5.TRADE_RETCODE_DONE:
+    if not tickets:
         return (
-            f"❌ *Trade failed*\n"
-            f"Code: `{result.retcode}`\n"
-            f"Reason: `{result.comment}`"
+            f"❌ *All {TRADE_SPLIT} orders failed*\n"
+            + "\n".join(failed)
         )
 
-    # Log the trade to data/trades.json and MySQL dashboard
-    _log_trade(signal, lot, price, result.order)
-    if signal_id:
-        from core.db import record_trade
-        record_trade(signal_id, result.order, lot, price)
+    # Log all filled tickets
+    from core.db import record_trade
+    for ticket, _ in tickets:
+        _log_trade(signal, split_lot, price, ticket)
+        if signal_id:
+            record_trade(signal_id, ticket, split_lot, price)
 
     direction_emoji = "🔴" if signal.direction == "sell" else "🟢"
-    tps_str = " → ".join(str(t) for t in signal.tps)
+    tps_str  = " → ".join(str(t) for t in signal.tps)
+    tick_lines = "\n".join(
+        f"  `#{t}` → TP `{tp_val}`" for t, tp_val in tickets
+    )
+    failed_str = ("\n⚠️ *Failed:* " + ", ".join(failed)) if failed else ""
 
     return (
-        f"✅ *Trade Executed!*\n\n"
+        f"✅ *Trade Executed! ({len(tickets)}/{TRADE_SPLIT} filled)*\n\n"
         f"{direction_emoji} `{symbol} {signal.direction.upper()}`\n"
-        f"Entry: `{price}`\n"
-        f"SL: `{signal.sl}`\n"
+        f"Entry: `{price}` | SL: `{signal.sl}`\n"
         f"TPs: `{tps_str}`\n\n"
-        f"{lot_explanation}\n\n"
-        f"🎫 Ticket: `{result.order}`"
+        f"{lot_explanation}\n"
+        f"📦 Split: `{TRADE_SPLIT} × {split_lot} lot`\n\n"
+        f"🎫 Tickets:\n{tick_lines}{failed_str}"
     )
 
 
