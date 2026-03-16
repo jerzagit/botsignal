@@ -68,7 +68,13 @@ MAX_SPREAD_PIPS = float(os.getenv("MAX_SPREAD_PIPS", "3.0"))
 # Minimum TP1:SL ratio required to allow the trade.
 # 1.0 = break-even math. Professional standard is 1.5.
 # If Hafiz's TP is smaller than the SL, skip — bad risk math.
-MIN_RR_RATIO = float(os.getenv("MIN_RR_RATIO", "1.0"))
+MIN_RR_RATIO = float(os.getenv("MIN_RR_RATIO", "1.4"))
+
+# ── Auto TP enforcement ────────────────────────────────────────────────────────
+# If Hafiz's SL is tight (< SL_MIN_PIPS), auto-override TP to TP_ENFORCE_PIPS
+# to ensure minimum reward. If SL >= SL_MIN_PIPS, trust Hafiz's TP.
+SL_MIN_PIPS      = int(os.getenv("SL_MIN_PIPS",      "50"))   # pips threshold
+TP_ENFORCE_PIPS  = int(os.getenv("TP_ENFORCE_PIPS",  "70"))   # override TP to this
 
 # ── Same-direction stack guard ─────────────────────────────────────────────────
 # Block opening a new trade if one already exists in the same direction

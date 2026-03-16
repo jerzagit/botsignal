@@ -13,7 +13,7 @@ import MetaTrader5 as mt5
 from core.config import MT5_PATH, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_SYMBOL_SUFFIX, \
                        SL_PIP_SIZE, ENTRY_MAX_DISTANCE_PIPS, MIN_MARGIN_LEVEL, \
                        MAX_SPREAD_PIPS, MIN_RR_RATIO, BLOCK_SAME_DIRECTION_STACK, \
-                       TRADE_SPLIT, MIN_LOT
+                       TRADE_SPLIT, MIN_LOT, SL_MIN_PIPS, TP_ENFORCE_PIPS
 from core.signal import Signal
 from core.risk   import calculate_lot
 
@@ -98,9 +98,34 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
                 f"_Close existing trades or move them to breakeven first._"
             )
 
-    # ── GUARD 4: TP:SL ratio — signal must be mathematically worth taking ────
-    sl_distance = abs(signal.entry_mid - signal.sl)
-    tp_distance = abs(signal.tps[0] - signal.entry_mid) if signal.tps else 0
+    # ── GUARD 4: Auto-adjust TP + RR ratio check ─────────────────────────────
+    sl_distance  = abs(signal.entry_mid - signal.sl)
+    sl_pips_calc = sl_distance / SL_PIP_SIZE
+
+    # Build effective TP list — override if Hafiz's SL is tight (< SL_MIN_PIPS)
+    effective_tps = list(signal.tps)
+    tp_override_note = ""
+    if sl_pips_calc < SL_MIN_PIPS:
+        min_tp_pts = TP_ENFORCE_PIPS * SL_PIP_SIZE
+        new_tps = []
+        for t in effective_tps:
+            tp_dist = abs(t - signal.entry_mid)
+            if tp_dist < min_tp_pts:
+                adjusted = round(
+                    signal.entry_mid + min_tp_pts if signal.direction == "buy"
+                    else signal.entry_mid - min_tp_pts, 2
+                )
+                new_tps.append(adjusted)
+            else:
+                new_tps.append(t)
+        if new_tps != effective_tps:
+            tp_override_note = (
+                f"\n⚙️ _SL tight ({sl_pips_calc:.0f} pips) — "
+                f"TP auto-adjusted to {TP_ENFORCE_PIPS} pips_"
+            )
+        effective_tps = new_tps
+
+    tp_distance = abs(effective_tps[0] - signal.entry_mid) if effective_tps else 0
     rr_ratio    = tp_distance / sl_distance if sl_distance > 0 else 0
     if rr_ratio < MIN_RR_RATIO:
         mt5.shutdown()
@@ -176,8 +201,8 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
     failed  = []
 
     for i in range(actual_splits):
-        # Assign TPs across splits — cycle through available TPs
-        split_tp = signal.tps[i % len(signal.tps)] if signal.tps else tp
+        # Assign TPs across splits — use effective_tps (may be auto-adjusted)
+        split_tp = effective_tps[i % len(effective_tps)] if effective_tps else tp
         req = {
             "action":       mt5.TRADE_ACTION_DEAL,
             "symbol":       symbol,
@@ -229,7 +254,7 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
         f"📦 Split: `{actual_splits} × {split_lot} lot`"
         + (f" _(reduced from {TRADE_SPLIT} — margin too small to split further)_" if actual_splits < TRADE_SPLIT else "")
         + "\n\n"
-        f"🎫 Tickets:\n{tick_lines}{failed_str}"
+        f"🎫 Tickets:\n{tick_lines}{failed_str}{tp_override_note}"
     )
 
 
