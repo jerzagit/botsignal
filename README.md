@@ -1,27 +1,29 @@
 # SignalBot
 
-Auto-trades your mentor's Telegram signals on MT5 — with a multi-layer guard system, dashboard, and night agent.
+Fully automatic Telegram-to-MT5 trading bot. Reads your mentor's signals, watches price, and executes trades with split entries — no tapping required.
 
 ---
 
 ## How it works
 
 ```
-Mentor posts signal in Telegram group
+Hafiz posts signal in Telegram group
         ↓
 Telethon reads it (as your account — no admin needed)
         ↓
-Bot runs pre-trade guard checks (6 layers)
+Bot sends "👀 Watching..." notification to your Telegram
         ↓
-Sends you confirmation: EXECUTE ✅ / SKIP ❌  (30-min window)
+Price watcher checks every 30s — waiting for price to enter zone
         ↓
-You tap EXECUTE → guard checks run again at execution time
+Price enters zone → 6 guards run
         ↓
-Trade placed on MT5 with auto-calculated lot size
+Trade split into N equal positions (TRADE_SPLIT)
         ↓
-Dashboard records the trade, polls outcome every 60 seconds
-        ↓  (if agent is on + night hours)
-Agent auto-executes while you sleep 🌙
+All positions placed on MT5 with auto-calculated lot size
+        ↓
+"🤖 Auto-Executed!" sent to your Telegram with all tickets
+        ↓
+Dashboard records trades, polls outcome every 60 seconds
 ```
 
 ---
@@ -32,9 +34,7 @@ Agent auto-executes while you sleep 🌙
 signalbot/
 ├── bot.py                  ← Entry point — run this
 ├── .env                    ← Your secrets (never commit)
-├── .env.example            ← Template — copy to .env
 ├── requirements.txt
-├── run_all.bat             ← Starts bot + dashboard together (Windows)
 │
 ├── core/
 │   ├── config.py           ← All settings loaded from .env
@@ -42,12 +42,10 @@ signalbot/
 │   ├── risk.py             ← Lot calculator (margin % ÷ SL distance)
 │   ├── mt5.py              ← MT5 connection, guards, trade execution
 │   ├── listener.py         ← Telethon: watches group as your account
-│   ├── notifier.py         ← Telegram bot: EXECUTE/SKIP/Close buttons
+│   ├── notifier.py         ← Telegram bot: close alert buttons
+│   ├── watcher.py          ← Price watcher: auto-executes when price enters zone
 │   ├── state.py            ← In-memory pending signals + close plans
 │   └── db.py               ← MySQL write functions
-│
-├── agent/
-│   └── agent.py            ← Night trading agent (10 PM–6 AM MYT)
 │
 ├── dashboard/
 │   ├── app.py              ← Flask web dashboard (http://localhost:5000)
@@ -57,12 +55,16 @@ signalbot/
 │
 ├── data/
 │   ├── session             ← Telethon session (auto-created on first run)
+│   ├── bot.pid             ← PID lock (prevents duplicate instances)
 │   └── trades.json         ← Local trade log (also mirrored to MySQL)
+│
+├── db/
+│   └── init.sql            ← MySQL schema (auto-applied on first run)
 │
 ├── logs/
 │   └── bot.log             ← Full log file
 │
-└── test_margin_guard.py    ← Unit tests for all trade guards (23 tests)
+└── test_margin_guard.py    ← Unit tests for all trade guards
 ```
 
 ---
@@ -90,28 +92,26 @@ pip install -r requirements.txt
 ### 4 — Create your Telegram bot
 
 1. Open Telegram → search **@BotFather** → `/newbot`
-2. Copy the token (looks like `123456789:AAF...`)
-3. Search your new bot → tap **Start** (required before it can message you)
+2. Copy the token
+3. Search your new bot → tap **Start**
 
 ### 5 — Get your Chat ID and Group ID
 
 - **Your Chat ID:** Send `/start` to **@userinfobot**
-- **Signal Group ID:** Forward any message from the group to **@userinfobot** — use the numeric ID (e.g. `-1002083967629`), not the username
+- **Signal Group ID:** Forward any message from the group to **@userinfobot** — use numeric ID (e.g. `-1002083967629`)
 
 ### 6 — Set up MT5
 
 - Download MT5 from your **broker's website** (not MetaQuotes)
-- **Always run MT5 as Administrator** — required for Python IPC
-- Find your server name at the bottom-right of the MT5 window (e.g. `VTMarkets-Live 5`)
-- Find your symbol suffix in MT5 Market Watch (VT Markets uses `-STD`, e.g. `XAUUSD-STD`)
+- **Run MT5 as Administrator** — required for Python IPC
+- Enable **Algo Trading** button in toolbar (must be green)
+- Find your symbol suffix in MT5 Market Watch (VT Markets uses `-STD` for live, `-VIP` for demo)
 
 ### 7 — Start MySQL
 
 ```bash
 docker start mysql-docker
 ```
-
-The `botsignal` database and tables are created automatically on first run.
 
 ### 8 — Configure .env
 
@@ -124,16 +124,34 @@ Fill in all values — see the full reference below.
 ### 9 — Run
 
 ```bash
-# Bot only
 python bot.py
-
-# Bot + Dashboard together
-run_all.bat
 ```
 
-**First run:** Telethon asks for your phone and a Telegram OTP. Enter them once — session saved to `data/session`, never asked again.
+**First run:** Telethon asks for your phone and a Telegram OTP. Enter once — session saved to `data/session`, never asked again.
 
-You'll receive **"SignalBot is LIVE!"** confirming it's running.
+You'll receive **"SignalBot is LIVE!"** on Telegram confirming it's running.
+
+---
+
+## Switching between DEMO and LIVE
+
+In `.env`, comment/uncomment the account block:
+
+```env
+# ── DEMO ──────────────────────────────────────────────
+MT5_LOGIN=1067995
+MT5_PASSWORD=...
+MT5_SERVER=VTMarkets-Demo
+MT5_SYMBOL_SUFFIX=-VIP
+
+# ── LIVE ──────────────────────────────────────────────
+#MT5_LOGIN=26656038
+#MT5_PASSWORD=...
+#MT5_SERVER=VTMarkets-Live 5
+#MT5_SYMBOL_SUFFIX=-STD
+```
+
+Restart `bot.py` after switching.
 
 ---
 
@@ -151,39 +169,44 @@ SIGNAL_GROUP=-1002083967629    # numeric group ID
 MT5_PATH=C:\Program Files\YourBroker MT5 Terminal\terminal64.exe
 MT5_LOGIN=...
 MT5_PASSWORD=...
-MT5_SERVER=YourBroker-Live 5   # exact name from MT5 status bar
-MT5_SYMBOL_SUFFIX=-STD         # suffix your broker appends (VT Markets = -STD)
+MT5_SERVER=YourBroker-Live 5
+MT5_SYMBOL_SUFFIX=-STD
 
 # ── Risk management ───────────────────────────────────
-RISK_PERCENT=0.05              # % of free margin to risk per trade
-MIN_LOT=0.01                   # minimum lot size
-MAX_LOT=0.50                   # maximum lot size
+RISK_PERCENT=0.10              # 10% of free margin to risk per trade
+MIN_LOT=0.01
+MAX_LOT=0.50
+
+# ── Trade split ───────────────────────────────────────
+TRADE_SPLIT=5                  # split each signal into N equal positions
 
 # ── Signal timing ─────────────────────────────────────
-SIGNAL_EXPIRY=1800             # 30 min — gives price time to reach entry zone
+SIGNAL_EXPIRY=1800             # 30 min — watcher window
+WATCH_INTERVAL_SECS=30         # how often watcher checks price
 
 # ── Entry proximity guard ─────────────────────────────
-ENTRY_MAX_DISTANCE_PIPS=50     # skip trade if price is >50 pips from entry zone
+ENTRY_MAX_DISTANCE_PIPS=50     # skip if price > 50 pips from zone
 
 # ── Margin level guard ────────────────────────────────
-MIN_MARGIN_LEVEL=300           # block if margin level < 300% (professional floor)
+MIN_MARGIN_LEVEL=300           # block if margin level < 300%
 
 # ── Spread guard ──────────────────────────────────────
-MAX_SPREAD_PIPS=3              # block if broker spread > 3 pips (news/off-hours)
+MAX_SPREAD_PIPS=3              # block if spread > 3 pips
 
 # ── Reward:Risk ratio guard ───────────────────────────
-MIN_RR_RATIO=1.0               # block if TP < SL (bad risk math)
+MIN_RR_RATIO=1.4               # block if TP/SL < 1.4
+
+# ── Auto TP enforcement ───────────────────────────────
+SL_MIN_PIPS=50                 # if SL < this, auto-adjust TP
+TP_ENFORCE_PIPS=70             # minimum TP distance when SL is tight
 
 # ── Same-direction stack guard ────────────────────────
-BLOCK_SAME_DIRECTION_STACK=true  # block adding same direction on small account
+BLOCK_SAME_DIRECTION_STACK=true
 
 # ── SL sanity warnings ────────────────────────────────
-SL_PIP_SIZE=0.1                # 1 pip = 0.1 price units for XAUUSD
-SL_WARN_MIN_PIPS=50            # warn if SL tighter than 50 pips
-SL_WARN_MAX_PIPS=70            # warn if SL wider than 70 pips
-
-# ── Early TP / breakeven ──────────────────────────────
-BREAKEVEN_KEEP_COUNT=2         # positions to keep at breakeven on early TP
+SL_PIP_SIZE=0.1
+SL_WARN_MIN_PIPS=50
+SL_WARN_MAX_PIPS=70
 
 # ── MySQL ─────────────────────────────────────────────
 DB_HOST=localhost
@@ -193,9 +216,9 @@ DB_USER=root
 DB_PASSWORD=...
 
 # ── Night agent ───────────────────────────────────────
-AGENT_START_HOUR_MY=22         # 10 PM Malaysia time
-AGENT_END_HOUR_MY=6            # 6 AM Malaysia time
-AGENT_AUTO_EXECUTE=false       # true = trades while you sleep (use with caution)
+AGENT_START_HOUR_MY=22
+AGENT_END_HOUR_MY=6
+AGENT_AUTO_EXECUTE=false
 AGENT_ENABLED=true
 ```
 
@@ -203,18 +226,34 @@ AGENT_ENABLED=true
 
 ## Trade guard system
 
-Every trade passes through **6 sequential guards** before an order is sent to MT5. All thresholds are configurable in `.env`.
+Every trade passes through **6 sequential guards** before an order is sent to MT5.
 
-| # | Guard | Default | Blocks when... |
-|---|-------|---------|---------------|
-| 1 | **Margin level** | ≥ 300% | Account is over-leveraged |
-| 2 | **Same-direction stack** | enabled | Already have same symbol + direction open |
-| 3 | **Reward:Risk ratio** | ≥ 1.0 | TP1 is smaller than SL (bad trade math) |
-| 4 | **Spread** | ≤ 3 pips | Broker spread is too wide (news / off-hours) |
-| 5 | **Entry proximity** | ≤ 50 pips | Price is far from Hafiz's entry zone (early signal) |
-| 6 | **Lot calculation** | — | Margin too thin to calculate a valid lot |
+| # | Guard | Default | Behaviour |
+|---|-------|---------|-----------|
+| 1 | **Margin level** | ≥ 300% | Block if account over-leveraged |
+| 2 | **Same-direction stack** | enabled | Block if same symbol+direction already at risk. Breakeven positions are **exempt** — new entries allowed alongside them |
+| 3 | **Auto TP + RR ratio** | ≥ 1.4 | If SL < 50 pips, TP auto-adjusted to 70 pips. Block if ratio still < 1.4 |
+| 4 | **Spread** | ≤ 3 pips | Block if broker spread too wide (retry on spread normalise) |
+| 5 | **Entry proximity** | ≤ 50 pips | Block if price too far from entry zone |
+| 6 | **Lot calculation** | — | Block if margin too thin for valid lot |
 
-When a guard fires, you receive a clear Telegram message explaining exactly why — no silent failures.
+---
+
+## Trade split
+
+Each signal is split into `TRADE_SPLIT` equal positions so you can take partial profit independently at different TP levels.
+
+```
+TRADE_SPLIT=5, lot=0.50  →  5 × 0.10 lot
+TPs cycled:  pos 1,3,5 → TP1  |  pos 2,4 → TP2
+```
+
+**Risk is preserved:** if the account is too small to split without exceeding MIN_LOT, the bot automatically reduces the number of splits.
+
+```
+TRADE_SPLIT=5, lot=0.01  →  1 × 0.01 lot  (can't split below MIN_LOT)
+TRADE_SPLIT=5, lot=0.05  →  5 × 0.01 lot  ✅
+```
 
 ---
 
@@ -227,93 +266,98 @@ risk_per_lot = sl_in_ticks × tick_value
 lot_size     = risk_amount / risk_per_lot
 lot_size     = clamp(lot_size, MIN_LOT, MAX_LOT)
 lot_size     = round to broker volume step
+split_lot    = lot_size / actual_splits
 ```
 
-- `free_margin` already reflects open trades and floating P&L
-- One order per signal — no layering
-- Small account (< $200) will usually clamp to `MIN_LOT = 0.01`
+If SL hits on all positions, max loss = `RISK_PERCENT` × free margin.
 
 ---
 
 ## Signal format
 
 ```
-xauusd sell @5096-5100
-sl 5103
-tp 5092
-tp 5090
+xauusd buy @4988.50-4984.50
+sl 4981.50
+tp 4993.50
+tp 4991.50
 Trade At Your Own Risk
 T.A.Y.O.R @AssistByHafizCarat
 ```
 
-Supported variations:
+Supported:
 - Single price: `xauusd buy @5096`
 - Range entry: `xauusd sell @5096-5100`
 - Multiple TPs: as many `tp PRICE` lines as needed
-- Case insensitive
-- Extra text (T.A.Y.O.R etc.) is ignored
+- Case insensitive — extra text ignored
 
 ---
 
 ## Close alert system
 
-The bot also detects Hafiz's early-close messages and sends you action buttons.
-
 ### Setup Failed
-Triggered by: `"setup failed"` anywhere in the message.
+**Trigger:** `"setup failed"` anywhere in message.
+**Action:** Button per signal group + CLOSE ALL button.
 
-Button per signal group + **CLOSE ALL** button.
+### Collect Profit *(new)*
+**Trigger:** `"collect profit"`, `"mau collect"`, `"siapa mau collect"`
+**Action:** 70% close (most profitable first) + 30% breakeven (free ride). Losing positions untouched.
 
-### Early Profit / Collect
-Triggered by any of:
-- `"profit Xpips"` (e.g. "profit 40pips")
-- `"siapa nak collect"`
-- `"collect dulu"`
-- `"dipersilakan"`
-- `"take profit now"`
-- `"early tp"`
+```
+💰 Collect Profit Plan
+70% secure · 30% breakeven
 
-**Breakeven plan shown:**
-- Top `BREAKEVEN_KEEP_COUNT` profitable positions → SL moved to entry (breakeven)
-- Remaining profitable positions → closed
-- Losing positions → left untouched (original SL remains)
+💵 CLOSE (3 positions — lock in profit)
+🔒 BREAKEVEN (2 positions — free ride)
+🔵 UNTOUCHED (losing positions — original SL stays)
+
+[✅ EXECUTE PLAN]  [❌ SKIP]
+```
+
+### Early Profit
+**Trigger:** `"siapa nak collect"`, `"collect dulu"`, `"dipersilakan"`, `"take profit now"`, `"early tp"`
+**Action:** Keep top `BREAKEVEN_KEEP_COUNT` at breakeven, close rest profitable, leave losses.
+
+---
+
+## Shutdown behaviour
+
+When you press **Ctrl+C**:
+- Bot stops cleanly
+- All open positions **stay alive** in MT5 — SL/TP remain active on broker
+- You receive a Telegram message: *"SignalBot stopped — positions still running"*
+- Restart `python bot.py` to resume signal monitoring
+
+**If bot crashes unexpectedly**, positions continue running with original SL/TP. No trades are auto-closed on crash.
+
+---
+
+## Duplicate instance protection
+
+`bot.py` writes a PID lock to `data/bot.pid` on startup. If you try to run a second copy while one is already running, it prints the existing PID and exits instead of conflicting with Telegram.
+
+To force-kill an old instance:
+```bash
+taskkill /PID <pid> /F
+```
 
 ---
 
 ## Dashboard
 
-Run: `python dashboard/app.py` → open http://localhost:5000
+Run: `python dashboard/app.py` → http://localhost:5000
 
-| Section | What you see |
-|---------|-------------|
-| Stat cards | Total signals, executed, skipped, expired, open trades, win rate |
-| P&L bar | Wins, losses, total profit/loss in USD |
-| Signal log | Timestamp, symbol, direction, entry zone, SL, TPs, status badge |
-| Trade rows | Ticket, lot, entry price, close price, outcome (WIN / LOSS / OPEN) |
+For remote access run `ngrok http 5000` in a separate terminal.
 
-**Status badges:**
-- `EXECUTED` — trade placed
-- `SKIPPED` — you skipped it
-- `EXPIRED` — 30 min passed without action
-- `PENDING` — waiting for your tap
-- `MANUAL` — trade opened directly in MT5 (not via bot)
-
-**Win/Loss detection:** Poller queries MT5 deal history every **60 seconds**. Captures both bot-placed and manually placed/closed trades.
-
-Dashboard auto-refreshes every 30 seconds.
-
----
-
-## Night trading agent
-
-Active window (default): **10 PM → 6 AM MYT** — covers London open + New York session.
-
-| `AGENT_AUTO_EXECUTE` | Behaviour |
-|---|---|
-| `false` (default) | Sends EXECUTE/SKIP buttons — you stay in control |
-| `true` | Executes automatically — you get a notification after |
-
-Start with `false`. Switch to `true` only after weeks of trusting the signals.
+| Badge | Meaning |
+|-------|---------|
+| `EXECUTED` | Trade placed via bot |
+| `SKIPPED` | You tapped SKIP |
+| `EXPIRED` | 30 min passed, price never reached zone |
+| `PENDING` | Watcher active — waiting for price |
+| `MANUAL` | Trade opened directly in MT5 |
+| `WIN` | Closed in profit |
+| `LOSS` | Closed at a loss |
+| `OPEN` | Trade still running |
 
 ---
 
@@ -323,28 +367,30 @@ Start with `false`. Switch to `true` only after weeks of trusting the signals.
 python -m pytest test_margin_guard.py -v
 ```
 
-23 unit tests covering all 6 guards: margin level, stack, RR ratio, spread, entry proximity, and a live MT5 reflection test.
-
 ---
 
 ## Troubleshooting
 
 | Problem | Fix |
 |---------|-----|
+| `Conflict: terminated by other getUpdates` | Another bot instance running — `taskkill /PID <pid> /F` or check `data/bot.pid` |
 | `IPC timeout` on MT5 | Open MT5 as Administrator before running bot.py |
-| `Symbol XAUUSD not found` | Check `MT5_SYMBOL_SUFFIX` in .env (VT Markets = `-STD`) |
+| `AutoTrading disabled` (code 10027) | Click **Algo Trading** button in MT5 toolbar — must be green |
+| `Symbol XAUUSD not found` | Check `MT5_SYMBOL_SUFFIX` — live=`-STD`, demo=`-VIP` |
+| `Invalid stops` | Signal entry/SL/TP prices don't match current price — signal may be outdated |
 | `AttributeError: 'User' has no 'title'` | Use numeric group ID in `SIGNAL_GROUP` |
-| `Forbidden` sending Telegram message | Open your bot and press Start |
-| `ModuleNotFoundError` | Run `pip install -r requirements.txt` |
+| `Forbidden` Telegram message | Open your bot in Telegram and press Start |
+| `ModuleNotFoundError` | `pip install -r requirements.txt` |
 | MT5 login failed | Check `MT5_SERVER` — must match exactly including spaces |
 | Telethon OTP keeps asking | Delete `data/session*` and re-login |
-| Trade blocked — margin level | Margin level below 300% — close some positions |
-| Trade blocked — stack guard | Already have same direction open — wait for it to close |
-| Trade blocked — spread | Spread too wide — wait for market to settle |
-| Trade blocked — RR ratio | Hafiz's TP is smaller than SL — not worth the risk |
-| Trade skipped — entry proximity | Price too far from entry zone — tap again when price is closer |
-| Dashboard shows no data | Run `docker start mysql-docker` before bot.py |
-| Manual trade not showing | Dashboard poller syncs every 60 sec — wait one minute |
+| Trade blocked — margin | Margin level < 300% — close some positions |
+| Trade blocked — stack | Same direction open at risk — wait or move to breakeven |
+| Trade blocked — spread | Spread too wide — watcher will retry automatically |
+| Trade blocked — RR ratio | TP/SL < 1.4 and TP couldn't be auto-adjusted |
+| Trade skipped — proximity | Price too far — watcher keeps checking every 30s |
+| Dashboard shows no data | `docker start mysql-docker` before bot.py |
+| Manual trade not showing | Poller syncs every 60s — wait one cycle |
+| `cryptography` error | `pip install cryptography` |
 
 ---
 
