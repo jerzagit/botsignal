@@ -81,17 +81,21 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
         )
 
     # ── GUARD 3: Same-direction stack — don't double up on small account ─────
+    # Exception: positions already at breakeven (SL == entry price) are free
+    # trades — no capital at risk, so new entries are allowed alongside them.
     if BLOCK_SAME_DIRECTION_STACK:
-        existing = mt5.positions_get(symbol=symbol) or []
+        existing  = mt5.positions_get(symbol=symbol) or []
         same_type = mt5.ORDER_TYPE_BUY if signal.direction == "buy" else mt5.ORDER_TYPE_SELL
-        stacked = [p for p in existing if p.type == same_type]
-        if stacked:
+        stacked   = [p for p in existing if p.type == same_type]
+        # Filter out breakeven positions (SL moved to entry price)
+        at_risk   = [p for p in stacked if round(p.sl, 2) != round(p.price_open, 2)]
+        if at_risk:
             mt5.shutdown()
             return (
-                f"⚠️ *Trade blocked — already have {len(stacked)} "
-                f"{signal.direction.upper()} position(s) on `{symbol}`*\n"
+                f"⚠️ *Trade blocked — already have {len(at_risk)} "
+                f"{signal.direction.upper()} position(s) at risk on `{symbol}`*\n"
                 f"Stacking same direction doubles your exposure.\n"
-                f"_Close existing trade or wait for it to close first._"
+                f"_Close existing trades or move them to breakeven first._"
             )
 
     # ── GUARD 4: TP:SL ratio — signal must be mathematically worth taking ────
