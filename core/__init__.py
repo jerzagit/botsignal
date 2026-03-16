@@ -1,0 +1,1 @@
+# SignalBot core package
