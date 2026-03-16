@@ -149,6 +149,11 @@ MT5_SYMBOL_SUFFIX=-STD
 DB_HOST=localhost
 DB_PORT=3307
 DB_PASSWORD=rootpass
+
+# Layered DCA entry (optional — default off)
+LAYER_MODE=false       # set to true to enable DCA layered entries
+LAYER_COUNT=7          # max layers (auto-scales: 3/5/7 based on margin)
+LAYER2_PIPS=35         # pip spacing between layers
 ```
 
 ---
@@ -309,6 +314,9 @@ After a VPS reboot, everything comes back up automatically — no manual interve
 | `db/init.sql` | MySQL schema (auto-applied on first run) |
 | `setup_vps.ps1` | One-shot VPS setup script |
 | `install_services.ps1` | Registers bot + dashboard as Windows services |
+| `core/layer_watcher.py` | DCA layered entry state machine |
+| `test_layer.py` | Live UAT: simulate a buy signal through layered DCA (demo account) |
+| `sim_dca.py` | Offline profit/risk scenario calculator for DCA entries |
 
 ---
 

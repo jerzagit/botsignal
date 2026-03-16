@@ -10,12 +10,14 @@ import asyncio
 
 from telethon import TelegramClient, events
 
-from core.config   import TG_API_ID, TG_API_HASH, SIGNAL_GROUP, YOUR_CHAT_ID, \
-                          SIGNAL_EXPIRY, ENTRY_MAX_DISTANCE_PIPS, WATCH_INTERVAL_SECS
-from core.signal   import parse_signal, parse_close_alert
-from core.state    import pending
-from core.notifier import send_close_confirmation, get_bot
-from core.watcher  import watch_and_execute
+from core.config       import TG_API_ID, TG_API_HASH, SIGNAL_GROUP, YOUR_CHAT_ID, \
+                              SIGNAL_EXPIRY, ENTRY_MAX_DISTANCE_PIPS, WATCH_INTERVAL_SECS, \
+                              LAYER_MODE, LAYER_COUNT, LAYER2_PIPS
+from core.signal       import parse_signal, parse_close_alert
+from core.state        import pending
+from core.notifier     import send_close_confirmation, get_bot
+from core.watcher      import watch_and_execute
+from core.layer_watcher import watch_layered_entry
 
 log = logging.getLogger(__name__)
 
@@ -124,6 +126,20 @@ async def start_listener():
             else f"`{signal.entry_low} – {signal.entry_high}`"
         )
         tps_str = " | ".join(f"`{t}`" for t in signal.tps)
+
+        if LAYER_MODE:
+            mode_line = (
+                f"🔢 Layered DCA mode — up to `{LAYER_COUNT}` layers "
+                f"(`{LAYER2_PIPS}p` apart, dynamic count)"
+            )
+            watcher_task = watch_layered_entry(signal, signal_id, bot)
+        else:
+            mode_line = (
+                f"🎯 Will auto-execute when price is within "
+                f"`{ENTRY_MAX_DISTANCE_PIPS} pips` of entry"
+            )
+            watcher_task = watch_and_execute(signal, signal_id, bot)
+
         await bot.send_message(
             chat_id=YOUR_CHAT_ID,
             text=(
@@ -131,8 +147,7 @@ async def start_listener():
                 f"*{signal.symbol}* {direction_emoji}\n"
                 f"Entry zone: {zone_str}\n"
                 f"SL: `{signal.sl}` | TP: {tps_str}\n\n"
-                f"🎯 Will auto-execute when price is within "
-                f"`{ENTRY_MAX_DISTANCE_PIPS} pips` of entry\n"
+                f"{mode_line}\n"
                 f"⏳ Watching for `{SIGNAL_EXPIRY // 60} min` "
                 f"(checking every `{WATCH_INTERVAL_SECS}s`)"
             ),
@@ -140,6 +155,6 @@ async def start_listener():
         )
 
         # Start the price watcher as a background asyncio task
-        asyncio.create_task(watch_and_execute(signal, signal_id, bot))
+        asyncio.create_task(watcher_task)
 
     await client.run_until_disconnected()

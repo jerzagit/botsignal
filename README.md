@@ -1,10 +1,12 @@
 # SignalBot
 
-Fully automatic Telegram-to-MT5 trading bot. Reads your mentor's signals, watches price, and executes trades with split entries — no tapping required.
+Fully automatic Telegram-to-MT5 trading bot. Reads your mentor's signals, watches price, and builds positions using DCA-style layered entries — no tapping required.
 
 ---
 
 ## How it works
+
+### Standard mode (`LAYER_MODE=false`)
 
 ```
 Hafiz posts signal in Telegram group
@@ -26,45 +28,70 @@ All positions placed on MT5 with auto-calculated lot size
 Dashboard records trades, polls outcome every 60 seconds
 ```
 
+### Layered DCA mode (`LAYER_MODE=true`)
+
+```
+Hafiz posts signal in Telegram group
+        ↓
+Bot calculates total lot + DYNAMIC layer count
+  (min(LAYER_COUNT, int(total_lot / MIN_LOT)))
+  → $200 account → 3 layers | $500 → 5 | $1000+ → 7
+        ↓
+"📍 Layer 1/N placed" — L1 fires when price enters zone
+        ↓
+Price dips 35 pips deeper → "📍 Layer 2/N placed" (better entry)
+        ↓
+Price dips 35 more pips → "📍 Layer 3/N placed" (best entry)
+        ↓
+(continues for all N layers)
+        ↓
+When upper layers hit TP → deepest layer moves to breakeven
+        ↓
+"🔒 L1–LN-1 TP secured → deepest layer free ride!" ♻️
+```
+
 ---
 
 ## Project structure
 
 ```
 signalbot/
-├── bot.py                  ← Entry point — run this
-├── .env                    ← Your secrets (never commit)
+├── bot.py                    ← Entry point — run this
+├── .env                      ← Your secrets (never commit)
 ├── requirements.txt
 │
 ├── core/
-│   ├── config.py           ← All settings loaded from .env
-│   ├── signal.py           ← Signal parser + CloseAlert parser
-│   ├── risk.py             ← Lot calculator (margin % ÷ SL distance)
-│   ├── mt5.py              ← MT5 connection, guards, trade execution
-│   ├── listener.py         ← Telethon: watches group as your account
-│   ├── notifier.py         ← Telegram bot: close alert buttons
-│   ├── watcher.py          ← Price watcher: auto-executes when price enters zone
-│   ├── state.py            ← In-memory pending signals + close plans
-│   └── db.py               ← MySQL write functions
+│   ├── config.py             ← All settings loaded from .env
+│   ├── signal.py             ← Signal parser + CloseAlert parser
+│   ├── risk.py               ← Lot calculator (margin % ÷ SL distance)
+│   ├── mt5.py                ← MT5 connection, 6 guards, trade execution
+│   ├── listener.py           ← Telethon: watches group as your account
+│   ├── notifier.py           ← Telegram bot: close alert buttons
+│   ├── watcher.py            ← Standard price watcher (LAYER_MODE=false)
+│   ├── layer_watcher.py      ← DCA layered entry state machine (LAYER_MODE=true)
+│   ├── state.py              ← In-memory pending signals + close plans
+│   └── db.py                 ← MySQL write functions
 │
 ├── dashboard/
-│   ├── app.py              ← Flask web dashboard (http://localhost:5000)
-│   ├── poller.py           ← MT5 win/loss outcome poller (60-sec interval)
+│   ├── app.py                ← Flask web dashboard (http://localhost:5000)
+│   ├── poller.py             ← MT5 win/loss outcome poller (60-sec interval)
 │   └── templates/
-│       └── index.html      ← Dashboard UI
+│       └── index.html        ← Dashboard UI
 │
 ├── data/
-│   ├── session             ← Telethon session (auto-created on first run)
-│   ├── bot.pid             ← PID lock (prevents duplicate instances)
-│   └── trades.json         ← Local trade log (also mirrored to MySQL)
+│   ├── session               ← Telethon session (auto-created on first run)
+│   ├── bot.pid               ← PID lock (prevents duplicate instances)
+│   └── trades.json           ← Local trade log (also mirrored to MySQL)
 │
 ├── db/
-│   └── init.sql            ← MySQL schema (auto-applied on first run)
+│   └── init.sql              ← MySQL schema (auto-applied on first run)
 │
 ├── logs/
-│   └── bot.log             ← Full log file
+│   └── bot.log               ← Full log file
 │
-└── test_margin_guard.py    ← Unit tests for all trade guards
+├── test_margin_guard.py      ← Unit tests for all trade guards
+├── test_layer.py             ← Live UAT test: simulates a buy signal through layered DCA
+└── sim_dca.py                ← Offline profit/risk simulator for DCA scenarios
 ```
 
 ---
@@ -177,7 +204,12 @@ RISK_PERCENT=0.10              # 10% of free margin to risk per trade
 MIN_LOT=0.01
 MAX_LOT=0.50
 
-# ── Trade split ───────────────────────────────────────
+# ── Layered DCA entry ─────────────────────────────────
+LAYER_MODE=false               # true = DCA layers | false = TRADE_SPLIT
+LAYER_COUNT=7                  # max layers (actual count is dynamic)
+LAYER2_PIPS=35                 # pip gap between each layer
+
+# ── Trade split (used when LAYER_MODE=false) ──────────
 TRADE_SPLIT=5                  # split each signal into N equal positions
 
 # ── Signal timing ─────────────────────────────────────
@@ -224,24 +256,149 @@ AGENT_ENABLED=true
 
 ---
 
-## Trade guard system
+## Layered DCA entry system
 
-Every trade passes through **6 sequential guards** before an order is sent to MT5.
+When `LAYER_MODE=true`, instead of placing all positions at once, the bot builds a position progressively as price moves in your favour.
 
-| # | Guard | Default | Behaviour |
-|---|-------|---------|-----------|
-| 1 | **Margin level** | ≥ 300% | Block if account over-leveraged |
-| 2 | **Same-direction stack** | enabled | Block if same symbol+direction already at risk. Breakeven positions are **exempt** — new entries allowed alongside them |
-| 3 | **Auto TP + RR ratio** | ≥ 1.4 | If SL < 50 pips, TP auto-adjusted to 70 pips. Block if ratio still < 1.4 |
-| 4 | **Spread** | ≤ 3 pips | Block if broker spread too wide (retry on spread normalise) |
-| 5 | **Entry proximity** | ≤ 50 pips | Block if price too far from entry zone |
-| 6 | **Lot calculation** | — | Block if margin too thin for valid lot |
+### Dynamic layer count
+
+The number of layers is calculated automatically from your account size:
+
+```
+actual_layers = min(LAYER_COUNT, int(total_lot / MIN_LOT))
+```
+
+| Free margin | Total lot (10% risk) | Layers |
+|-------------|----------------------|--------|
+| ~$200       | ~0.03                | 3      |
+| ~$500       | ~0.05                | 5      |
+| ~$1,000+    | ~0.10+               | 7      |
+
+Your account grows → more layers placed automatically. No config change needed.
+
+### Layer trigger prices
+
+```
+L1 entry:  price enters zone           (standard proximity guard)
+L2 entry:  L1_entry − 35 pips (buy)   (35 pips deeper = better price)
+L3 entry:  L1_entry − 70 pips (buy)   (70 pips deeper = even better)
+LN entry:  L1_entry − N×35 pips       (each layer 35 pips further)
+```
+
+For sell signals, pips are added (higher price = better sell entry).
+
+### TP assignment
+
+```
+L1 … LN-1  →  cycle through Hafiz's TP list (quick exits)
+LN (deepest) →  furthest TP (free ride position)
+```
+
+### Breakeven trigger
+
+When all upper layers (L1 … LN-1) close at TP:
+→ deepest layer (LN) automatically moves SL to breakeven.
+→ You've locked profit and LN runs risk-free to the furthest TP.
+
+### Risk preservation
+
+```
+Max loss if all layers SL = RISK_PERCENT × free_margin   (same as today)
+Max loss if only L1 placed = total_lot / LAYER_COUNT × SL_value
+```
+
+If price never reaches L2 or beyond, only L1 is at risk — a fraction of planned exposure.
+
+### Telegram messages
+
+```
+📍 Layer 1/3 placed @ 3200.00
+   XAUUSD BUY | Lot: 0.01 | TP: 3220.00
+   📍 L2 triggers @ 3196.50 (35p deeper)
+
+📍 Layer 2/3 placed @ 3196.50
+   XAUUSD BUY | Lot: 0.01 | TP: 3250.00
+   📍 L3 triggers @ 3193.00 (35p deeper)
+
+📍 Layer 3/3 placed @ 3193.00
+   XAUUSD BUY | Lot: 0.01 | TP: 3220.00
+   🎯 All layers active — monitoring TPs
+
+🔒 L1–L2 TP secured → L3 free ride!
+   XAUUSD BUY | #12345678 moved to breakeven ♻️
+```
 
 ---
 
-## Trade split
+## Trade guard system
 
-Each signal is split into `TRADE_SPLIT` equal positions so you can take partial profit independently at different TP levels.
+Every trade — and **every layer** in DCA mode — passes through **6 sequential guards** before an order hits MT5. Guards run inside `execute_trade()` in `core/mt5.py`.
+
+### Guard order
+
+| # | Guard | Env var | Default | Fires when |
+|---|-------|---------|---------|-----------|
+| 1 | **Margin level** | `MIN_MARGIN_LEVEL` | 300% | `equity / used_margin × 100 < 300%`. Skipped if no open trades (margin = 0). |
+| 2 | **Same-direction stack** | `BLOCK_SAME_DIRECTION_STACK` | true | Same symbol + direction already open at risk. Own session's DCA tickets and breakeven positions are **exempt**. |
+| 3 | **Auto TP + RR ratio** | `MIN_RR_RATIO`, `SL_MIN_PIPS`, `TP_ENFORCE_PIPS` | 1.4 / 50p / 70p | Uses `entry_mid` for calculation. If SL < 50 pips, TP auto-overridden to 70 pips from mid first. Blocks if TP/SL still < 1.4 after override. |
+| 4 | **Spread** | `MAX_SPREAD_PIPS` | 3 pips | Live broker spread > 3 pips. Retries automatically next interval — never fatal. |
+| 5 | **Entry proximity** | `ENTRY_MAX_DISTANCE_PIPS` | 50 pips | Price > 50 pips from entry zone. **Skipped for L2+ in DCA mode** — deeper entries are intentionally outside the zone. |
+| 6 | **Lot calculation** | — | — | `calculate_lot()` returns 0 — margin too thin for even MIN_LOT. |
+
+All guard fires are logged to the `guard_events` MySQL table and visible in the dashboard Trade Guards panel.
+
+### Guard behaviour: standard mode vs DCA mode
+
+| Situation | Standard mode | DCA mode |
+|-----------|--------------|----------|
+| Any guard blocks | Trade skipped, notify | Depends on which layer (see below) |
+| Spread too wide | Watcher retries next 30s | Same — retries next interval for any layer |
+| L1 blocked (non-spread) | Trade skipped | **Session ends** — same consequence |
+| L2+ blocked by spread | — | Retry next interval |
+| L2+ blocked by other guard | — | **Layer skipped**, bot continues watching for the next layer trigger |
+| Proximity guard | Blocks if price > 50p from zone | L1: active. **L2+: skipped by design** (deeper entries are always outside zone) |
+| Stack guard | Blocks own prior trades | Own DCA session tickets passed as `own_tickets` — **exempt from stack check** |
+
+### Lot sizing in DCA mode — important detail
+
+The lot is sized **once** at signal arrival using `entry_mid` (midpoint of entry zone), not the actual execution price:
+
+```
+risk_amount  = free_margin × RISK_PERCENT        # e.g. $100 on $1,000 account
+sl_pips_mid  = (entry_mid − SL) / pip_size       # e.g. 40 pips (mid to SL)
+risk_per_lot = sl_pips_mid × pip_value           # e.g. $400 per lot
+total_lot    = risk_amount / risk_per_lot         # e.g. 0.25 lots
+lot_per_layer = total_lot / actual_layers         # e.g. 0.12 each (2 layers)
+```
+
+Because L1 executes at the **zone top** (further from SL) and L2 executes **deeper** (closer to SL), the actual dollar risk per layer differs from the designed split — but they roughly average out near the 10% budget. Worst-case combined loss across all layers is ≈ `RISK_PERCENT × free_margin`.
+
+### SL safety cap — layers can never cross the SL
+
+Before the watcher loop starts, `layer_watcher.py` automatically caps the layer count so no trigger price reaches or crosses the SL:
+
+```
+sl_pips      = (entry_mid − SL) / pip_size
+safe_steps   = int((sl_pips − 1) / LAYER2_PIPS)   # −1 pip buffer
+max_by_sl    = 1 + safe_steps
+actual_layers = min(by_margin, max_by_sl)
+```
+
+Example — BUY zone 5081–5085, SL 5079, LAYER2_PIPS=35:
+```
+sl_pips    = 40
+safe_steps = int(39 / 35) = 1  →  max_by_sl = 2
+→ only 2 layers placed (L1 @ 5085, L2 @ 5081.5)
+→ L3 would be @ 5078.0 — below SL → blocked before even starting
+```
+
+A runtime check also runs each tick — if the next trigger is at or beyond SL, the bot jumps straight to monitoring without placing that layer.
+
+---
+
+## Trade split *(standard mode only)*
+
+When `LAYER_MODE=false`, each signal is split into `TRADE_SPLIT` equal positions so you can take partial profit independently at different TP levels.
 
 ```
 TRADE_SPLIT=5, lot=0.50  →  5 × 0.10 lot
@@ -255,6 +412,8 @@ TRADE_SPLIT=5, lot=0.01  →  1 × 0.01 lot  (can't split below MIN_LOT)
 TRADE_SPLIT=5, lot=0.05  →  5 × 0.01 lot  ✅
 ```
 
+> When `LAYER_MODE=true`, TRADE_SPLIT is ignored — each layer is always 1 order.
+
 ---
 
 ## Lot sizing formula
@@ -266,7 +425,9 @@ risk_per_lot = sl_in_ticks × tick_value
 lot_size     = risk_amount / risk_per_lot
 lot_size     = clamp(lot_size, MIN_LOT, MAX_LOT)
 lot_size     = round to broker volume step
-split_lot    = lot_size / actual_splits
+
+Standard mode:  split_lot = lot_size / actual_splits
+Layered mode:   layer_lot = lot_size / actual_layers  (dynamic)
 ```
 
 If SL hits on all positions, max loss = `RISK_PERCENT` × free margin.
@@ -298,7 +459,7 @@ Supported:
 **Trigger:** `"setup failed"` anywhere in message.
 **Action:** Button per signal group + CLOSE ALL button.
 
-### Collect Profit *(new)*
+### Collect Profit
 **Trigger:** `"collect profit"`, `"mau collect"`, `"siapa mau collect"`
 **Action:** 70% close (most profitable first) + 30% breakeven (free ride). Losing positions untouched.
 
@@ -385,9 +546,12 @@ python -m pytest test_margin_guard.py -v
 | Telethon OTP keeps asking | Delete `data/session*` and re-login |
 | Trade blocked — margin | Margin level < 300% — close some positions |
 | Trade blocked — stack | Same direction open at risk — wait or move to breakeven |
-| Trade blocked — spread | Spread too wide — watcher will retry automatically |
+| Trade blocked — spread | Watcher retries automatically when spread normalises |
 | Trade blocked — RR ratio | TP/SL < 1.4 and TP couldn't be auto-adjusted |
 | Trade skipped — proximity | Price too far — watcher keeps checking every 30s |
+| L2 blocked (DCA mode) | Non-spread guard blocked L2 — bot skips it and watches for L3 |
+| L2 spread retry (DCA mode) | Normal — bot retries next 30s interval until spread normalises |
+| Only L1 placed then stopped | L1 SL hit before price dipped to L2 — normal risk behaviour |
 | Dashboard shows no data | `docker start mysql-docker` before bot.py |
 | Manual trade not showing | Poller syncs every 60s — wait one cycle |
 | `cryptography` error | `pip install cryptography` |

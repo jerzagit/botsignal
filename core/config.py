@@ -94,6 +94,14 @@ DB_NAME     = os.getenv("DB_NAME",     "botsignal")
 DB_USER     = os.getenv("DB_USER",     "root")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
+# ── Layered DCA entry ─────────────────────────────────────────────────────────
+# When enabled, spreads the full position across N layers as price dips deeper.
+# Layer count is DYNAMIC: min(LAYER_COUNT, int(total_lot / MIN_LOT))
+# → small account → 3 layers, medium → 5, large → 7 (with LAYER_COUNT=7)
+LAYER_MODE    = os.getenv("LAYER_MODE",  "false").lower() == "true"
+LAYER_COUNT   = int(os.getenv("LAYER_COUNT",  "7"))    # max layers (dynamic floor: 1)
+LAYER2_PIPS   = int(os.getenv("LAYER2_PIPS",  "35"))   # pips between each layer
+
 # ── Trading agent schedule (Malaysia time = UTC+8) ────────────────────────────
 # Agent runs between these hours MY time (e.g. 22:00 – 06:00 covers London+NY)
 AGENT_START_HOUR_MY = int(os.getenv("AGENT_START_HOUR_MY", "22"))  # 10 PM

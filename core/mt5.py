@@ -64,11 +64,20 @@ def mt5_connect_test() -> tuple[bool, str]:
 
 # ── Trade execution ───────────────────────────────────────────────────────────
 
-def execute_trade(signal: Signal, signal_id: str = None) -> str:
+def execute_trade(signal: Signal, signal_id: str = None,
+                  lot_override: float = None,
+                  own_tickets: list = None,
+                  tp_override: float = None,
+                  skip_proximity: bool = False) -> str:
     """
     Place a market order on MT5 for the given signal.
-    Lot size is auto-calculated from margin % risk.
-    All TPs from the signal are noted; MT5 is set to TP1 (first target).
+
+    Extra params (all optional, for layered DCA mode):
+      lot_override   – use this lot instead of calculate_lot()
+      own_tickets    – exempt these tickets from the stack guard (own session layers)
+      tp_override    – place a single order with this TP (skips TRADE_SPLIT loop)
+      skip_proximity – skip proximity guard (L2+ are intentionally outside zone)
+
     Returns a human-readable result message.
     """
     if not mt5_connect():
@@ -102,6 +111,9 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
         existing  = mt5.positions_get(symbol=symbol) or []
         same_type = mt5.ORDER_TYPE_BUY if signal.direction == "buy" else mt5.ORDER_TYPE_SELL
         stacked   = [p for p in existing if p.type == same_type]
+        # Exempt our own layer positions from the stack check
+        if own_tickets:
+            stacked = [p for p in stacked if p.ticket not in own_tickets]
         # Filter out breakeven positions (SL moved to entry price)
         at_risk   = [p for p in stacked if round(p.sl, 2) != round(p.price_open, 2)]
         if at_risk:
@@ -191,32 +203,72 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
         )
 
     # ── GUARD 6: Entry proximity — price must be near Hafiz's entry zone ─────
-    distance_pts  = max(0.0, max(signal.entry_low - price, price - signal.entry_high))
-    distance_pips = distance_pts / SL_PIP_SIZE
-    if distance_pips > ENTRY_MAX_DISTANCE_PIPS:
-        _fire_guard("proximity", signal, signal_id,
-                    f"Price {price} too far from zone {signal.entry_low}–{signal.entry_high}",
-                    f"{distance_pips:.0f} pips away", f"≤{ENTRY_MAX_DISTANCE_PIPS} pips")
-        mt5.shutdown()
-        zone_str = (
-            f"{signal.entry_low}"
-            if signal.entry_low == signal.entry_high
-            else f"{signal.entry_low}–{signal.entry_high}"
-        )
-        return (
-            f"⏳ *Trade skipped — price too far from entry zone*\n"
-            f"Current price: `{price}` | Entry zone: `{zone_str}`\n"
-            f"Distance: `{distance_pips:.0f} pips` (max: `{ENTRY_MAX_DISTANCE_PIPS} pips`)\n"
-            f"_Signal came early — tap again when price is closer._"
-        )
+    # Skipped for L2+ layers (they are intentionally outside zone by design)
+    if not skip_proximity:
+        distance_pts  = max(0.0, max(signal.entry_low - price, price - signal.entry_high))
+        distance_pips = distance_pts / SL_PIP_SIZE
+        if distance_pips > ENTRY_MAX_DISTANCE_PIPS:
+            _fire_guard("proximity", signal, signal_id,
+                        f"Price {price} too far from zone {signal.entry_low}–{signal.entry_high}",
+                        f"{distance_pips:.0f} pips away", f"≤{ENTRY_MAX_DISTANCE_PIPS} pips")
+            mt5.shutdown()
+            zone_str = (
+                f"{signal.entry_low}"
+                if signal.entry_low == signal.entry_high
+                else f"{signal.entry_low}–{signal.entry_high}"
+            )
+            return (
+                f"⏳ *Trade skipped — price too far from entry zone*\n"
+                f"Current price: `{price}` | Entry zone: `{zone_str}`\n"
+                f"Distance: `{distance_pips:.0f} pips` (max: `{ENTRY_MAX_DISTANCE_PIPS} pips`)\n"
+                f"_Signal came early — tap again when price is closer._"
+            )
 
-    # Auto lot size from risk %
-    lot, lot_explanation = calculate_lot(signal)
+    # Auto lot size from risk % (or use pre-calculated layer lot)
+    if lot_override is not None:
+        lot = lot_override
+        lot_explanation = f"📦 Lot: `{lot}` (layer)"
+    else:
+        lot, lot_explanation = calculate_lot(signal)
     if lot == 0.0:
         _fire_guard("lot_calc", signal, signal_id,
                     lot_explanation, "0.00 lot", f"≥{MIN_LOT}")
         mt5.shutdown()
         return f"❌ Lot calculation failed:\n{lot_explanation}"
+
+    direction_emoji = "🔴" if signal.direction == "sell" else "🟢"
+
+    # ── Single-order mode (used by layer watcher — tp_override provided) ─────
+    if tp_override is not None:
+        req = {
+            "action":       mt5.TRADE_ACTION_DEAL,
+            "symbol":       symbol,
+            "volume":       lot,
+            "type":         order_type,
+            "price":        price,
+            "sl":           signal.sl,
+            "tp":           tp_override,
+            "deviation":    20,
+            "magic":        20250101,
+            "comment":      "SignalBot Layer",
+            "type_time":    mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        r = mt5.order_send(req)
+        mt5.shutdown()
+        if r.retcode != mt5.TRADE_RETCODE_DONE:
+            return f"❌ Layer order failed: `{r.comment}` (code `{r.retcode}`)"
+        from core.db import record_trade
+        _log_trade(signal, lot, price, r.order)
+        if signal_id:
+            record_trade(signal_id, r.order, lot, price)
+        return (
+            f"✅ *Trade Executed!*\n\n"
+            f"{direction_emoji} `{symbol} {signal.direction.upper()}`\n"
+            f"Entry: `{price}` | SL: `{signal.sl}` | TP: `{tp_override}`\n"
+            f"Lot: `{lot}` | Ticket: `#{r.order}`"
+            f"{tp_override_note}"
+        )
 
     # ── Split lot into TRADE_SPLIT equal positions ────────────────────────────
     # Cap splits so total risk never exceeds the calculated lot.
@@ -267,7 +319,6 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
         if signal_id:
             record_trade(signal_id, ticket, split_lot, price)
 
-    direction_emoji = "🔴" if signal.direction == "sell" else "🟢"
     tps_str  = " → ".join(str(t) for t in signal.tps)
     tick_lines = "\n".join(
         f"  `#{t}` → TP `{tp_val}`" for t, tp_val in tickets
