@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv()
 
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 from core.db import get_conn
 from core.config import (
     MIN_MARGIN_LEVEL, MAX_SPREAD_PIPS, MIN_RR_RATIO,
@@ -40,30 +40,49 @@ def index():
 
 @app.route("/api/stats")
 def api_stats():
+    date_from = request.args.get('date_from')
+    date_to   = request.args.get('date_to')
+
+    # Signal date filter (received_at)
+    sig_cond, sig_params = [], []
+    if date_from:
+        sig_cond.append("received_at >= %s")
+        sig_params.append(date_from + ' 00:00:00')
+    if date_to:
+        sig_cond.append("received_at <= %s")
+        sig_params.append(date_to + ' 23:59:59')
+    sig_df = ("AND " + " AND ".join(sig_cond)) if sig_cond else ""
+
+    # Trade date filter — join signals so we can filter by received_at
+    trd_join   = "JOIN signals s ON t.signal_id = s.signal_id" if sig_cond else ""
+    trd_cond   = [c.replace("received_at", "s.received_at") for c in sig_cond]
+    trd_df     = ("AND " + " AND ".join(trd_cond)) if trd_cond else ""
+    trd_params = list(sig_params)
+
     conn = get_conn()
     with conn.cursor() as cur:
-        cur.execute("SELECT COUNT(*) AS n FROM signals")
+        cur.execute(f"SELECT COUNT(*) AS n FROM signals WHERE 1=1 {sig_df}", sig_params)
         total = cur.fetchone()["n"]
 
-        cur.execute("SELECT COUNT(*) AS n FROM signals WHERE status = 'executed'")
+        cur.execute(f"SELECT COUNT(*) AS n FROM signals WHERE status = 'executed' {sig_df}", sig_params)
         executed = cur.fetchone()["n"]
 
-        cur.execute("SELECT COUNT(*) AS n FROM signals WHERE status = 'skipped'")
+        cur.execute(f"SELECT COUNT(*) AS n FROM signals WHERE status = 'skipped' {sig_df}", sig_params)
         skipped = cur.fetchone()["n"]
 
-        cur.execute("SELECT COUNT(*) AS n FROM signals WHERE status = 'expired'")
+        cur.execute(f"SELECT COUNT(*) AS n FROM signals WHERE status = 'expired' {sig_df}", sig_params)
         expired = cur.fetchone()["n"]
 
-        cur.execute("SELECT COUNT(*) AS n FROM trades WHERE outcome = 'win'")
+        cur.execute(f"SELECT COUNT(*) AS n FROM trades t {trd_join} WHERE t.outcome = 'win' {trd_df}", trd_params)
         wins = cur.fetchone()["n"]
 
-        cur.execute("SELECT COUNT(*) AS n FROM trades WHERE outcome = 'loss'")
+        cur.execute(f"SELECT COUNT(*) AS n FROM trades t {trd_join} WHERE t.outcome = 'loss' {trd_df}", trd_params)
         losses = cur.fetchone()["n"]
 
-        cur.execute("SELECT COUNT(*) AS n FROM trades WHERE outcome IS NULL")
+        cur.execute(f"SELECT COUNT(*) AS n FROM trades t {trd_join} WHERE t.outcome IS NULL {trd_df}", trd_params)
         open_trades = cur.fetchone()["n"]
 
-        cur.execute("SELECT COALESCE(SUM(profit), 0) AS total FROM trades WHERE outcome IS NOT NULL")
+        cur.execute(f"SELECT COALESCE(SUM(t.profit), 0) AS total FROM trades t {trd_join} WHERE t.outcome IS NOT NULL {trd_df}", trd_params)
         total_profit = float(cur.fetchone()["total"])
 
     conn.close()
@@ -84,9 +103,21 @@ def api_stats():
 
 @app.route("/api/signals")
 def api_signals():
+    date_from = request.args.get('date_from')
+    date_to   = request.args.get('date_to')
+
+    cond, params = [], []
+    if date_from:
+        cond.append("s.received_at >= %s")
+        params.append(date_from + ' 00:00:00')
+    if date_to:
+        cond.append("s.received_at <= %s")
+        params.append(date_to + ' 23:59:59')
+    where = ("WHERE " + " AND ".join(cond)) if cond else ""
+
     conn = get_conn()
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT
                 s.signal_id,
                 s.received_at,
@@ -108,9 +139,10 @@ def api_signals():
                 t.layer_num
             FROM signals s
             LEFT JOIN trades t ON s.signal_id = t.signal_id
+            {where}
             ORDER BY s.received_at DESC
-            LIMIT 200
-        """)
+            LIMIT 500
+        """, params)
         rows = cur.fetchall()
     conn.close()
 

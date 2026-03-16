@@ -118,6 +118,29 @@
     .badge.dca       { background: #dbeafe; color: #1e40af; font-weight: 600; }
     .badge.direct    { background: #f3f4f6; color: #374151; }
 
+    /* ── Date filter bar ──────────────────────────────────── */
+    .filter-bar {
+      background: white; border-radius: 10px; padding: 10px 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+      display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    .filter-bar .period-label { font-size: 0.78rem; font-weight: 600; color: #555; white-space: nowrap; }
+    .filter-bar .sep { color: #d1d5db; }
+    .quick-btns { display: flex; gap: 6px; }
+    .quick-btn {
+      padding: 4px 12px; border-radius: 6px; border: 1px solid #e5e7eb;
+      cursor: pointer; font-size: 0.78rem; background: #f9fafb; color: #374151;
+      font-weight: 500; transition: all 0.15s;
+    }
+    .quick-btn:hover { background: #f0f0f0; }
+    .quick-btn.active { background: #1a1a2e; color: white; border-color: #1a1a2e; }
+    .filter-bar label { font-size: 0.78rem; color: #888; display: flex; align-items: center; gap: 5px; }
+    .filter-bar input[type="date"] {
+      padding: 4px 8px; border: 1px solid #e5e7eb; border-radius: 6px;
+      font-size: 0.78rem; color: #222; background: #f9fafb;
+    }
+
     @media (max-width: 700px) {
       table { font-size: 0.75rem; }
       th, td { padding: 8px 6px; }
@@ -132,6 +155,20 @@
 </header>
 
 <div class="container">
+
+  <!-- Date Filter Bar -->
+  <div class="filter-bar">
+    <span class="period-label">Period:</span>
+    <div class="quick-btns">
+      <button class="quick-btn active" id="qb-today"     onclick="setQuickFilter('today')">Today</button>
+      <button class="quick-btn"        id="qb-yesterday" onclick="setQuickFilter('yesterday')">Yesterday</button>
+      <button class="quick-btn"        id="qb-week"      onclick="setQuickFilter('week')">This Week</button>
+      <button class="quick-btn"        id="qb-all"       onclick="setQuickFilter('all')">All Time</button>
+    </div>
+    <span class="sep">|</span>
+    <label>From <input type="date" id="filter-from" onchange="setCustomFilter()"></label>
+    <label>To <input type="date" id="filter-to" onchange="setCustomFilter()"></label>
+  </div>
 
   <!-- Stat Cards -->
   <div class="cards">
@@ -284,8 +321,64 @@
 </div>
 
 <script>
+  // ── Date filter state (default: today) ───────────────────────────
+  function todayStr() { return new Date().toISOString().split('T')[0]; }
+  let filterFrom = todayStr();
+  let filterTo   = todayStr();
+
+  function buildParams() {
+    const p = new URLSearchParams();
+    if (filterFrom) p.set('date_from', filterFrom);
+    if (filterTo)   p.set('date_to',   filterTo);
+    return p.toString() ? '?' + p.toString() : '';
+  }
+
+  function setQuickFilter(period) {
+    const today = todayStr();
+    ['today','yesterday','week','all'].forEach(k => {
+      document.getElementById('qb-' + k).classList.remove('active');
+    });
+    document.getElementById('qb-' + period).classList.add('active');
+
+    if (period === 'today') {
+      filterFrom = filterTo = today;
+    } else if (period === 'yesterday') {
+      const d = new Date(); d.setDate(d.getDate() - 1);
+      filterFrom = filterTo = d.toISOString().split('T')[0];
+    } else if (period === 'week') {
+      const d = new Date();
+      const diff = d.getDay() === 0 ? 6 : d.getDay() - 1;
+      d.setDate(d.getDate() - diff);
+      filterFrom = d.toISOString().split('T')[0];
+      filterTo   = today;
+    } else {
+      filterFrom = filterTo = null;
+    }
+    document.getElementById('filter-from').value = filterFrom || '';
+    document.getElementById('filter-to').value   = filterTo   || '';
+    loadStats();
+    loadSignals();
+  }
+
+  function setCustomFilter() {
+    filterFrom = document.getElementById('filter-from').value || null;
+    filterTo   = document.getElementById('filter-to').value   || null;
+    ['today','yesterday','week','all'].forEach(k => {
+      document.getElementById('qb-' + k).classList.remove('active');
+    });
+    loadStats();
+    loadSignals();
+  }
+
+  // ── Formatting helpers ────────────────────────────────────────────
   function fmt(n, dp = 2) {
     return n !== null && n !== undefined ? Number(n).toFixed(dp) : '—';
+  }
+
+  function fmtTime(s) {
+    if (!s) return '—';
+    // Trim seconds: "2026-03-17 06:26:47" → "2026-03-17 06:26"
+    return s.slice(0, 16);
   }
 
   function statusBadge(s) {
@@ -308,7 +401,7 @@
   }
 
   function loadStats() {
-    fetch('/api/stats')
+    fetch('/api/stats' + buildParams())
       .then(r => r.json())
       .then(d => {
         document.getElementById('total-signals').textContent = d.total_signals;
@@ -328,7 +421,7 @@
   }
 
   function loadSignals() {
-    fetch('/api/signals')
+    fetch('/api/signals' + buildParams())
       .then(r => r.json())
       .then(rows => {
         const tbody = document.getElementById('signal-table-body');
@@ -340,20 +433,20 @@
         let html = '';
         rows.forEach(s => {
           const entry = s.entry_low === s.entry_high
-            ? fmt(s.entry_low, 5)
-            : `${fmt(s.entry_low, 5)} – ${fmt(s.entry_high, 5)}`;
+            ? fmt(s.entry_low, 2)
+            : `${fmt(s.entry_low, 2)} – ${fmt(s.entry_high, 2)}`;
 
           const tpsStr = Array.isArray(s.tps)
-            ? s.tps.map((t, i) => `TP${i+1}: ${fmt(t, 5)}`).join(' &nbsp;')
+            ? s.tps.map((t, i) => `TP${i+1}: ${fmt(t, 2)}`).join(' &nbsp;')
             : '—';
 
           html += `
             <tr>
-              <td>${s.received_at || '—'}</td>
+              <td>${fmtTime(s.received_at)}</td>
               <td><strong>${s.symbol}</strong></td>
               <td>${dirBadge(s.direction)}</td>
               <td>${entry}</td>
-              <td>${fmt(s.sl, 5)}</td>
+              <td>${fmt(s.sl, 2)}</td>
               <td class="tps">${tpsStr}</td>
               <td>${statusBadge(s.status)}</td>
             </tr>`;
@@ -368,11 +461,11 @@
                   &nbsp;&nbsp;🎫 Ticket: <strong>${s.ticket}</strong>
                   ${entryBadge(s.entry_mode, s.layer_num)}
                   &nbsp;|&nbsp; Lot: ${fmt(s.lot, 2)}
-                  &nbsp;|&nbsp; Entry: ${fmt(s.entry_price, 5)}
+                  &nbsp;|&nbsp; Entry: ${fmt(s.entry_price, 2)}
                   &nbsp;|&nbsp; Outcome: ${outcomeBadge(s.outcome)}
                   ${s.profit !== null ? `&nbsp;|&nbsp; P&L: ${prof}` : ''}
-                  ${s.close_price ? `&nbsp;|&nbsp; Close: ${fmt(s.close_price, 5)}` : ''}
-                  ${s.closed_at ? `&nbsp;|&nbsp; Closed: ${s.closed_at}` : ''}
+                  ${s.close_price ? `&nbsp;|&nbsp; Close: ${fmt(s.close_price, 2)}` : ''}
+                  ${s.closed_at ? `&nbsp;|&nbsp; Closed: ${fmtTime(s.closed_at)}` : ''}
                 </td>
               </tr>`;
           }
@@ -507,7 +600,7 @@
         rows.forEach(g => {
           html += `
             <tr>
-              <td>${g.fired_at || '—'}</td>
+              <td>${fmtTime(g.fired_at)}</td>
               <td>${guardBadge(g.guard_name)}</td>
               <td><strong>${g.symbol || '—'}</strong></td>
               <td>${dirBadgeSmall(g.direction)}</td>
@@ -529,6 +622,10 @@
     document.getElementById('last-updated').textContent =
       'Last updated: ' + new Date().toLocaleTimeString();
   }
+
+  // Init date inputs to today
+  document.getElementById('filter-from').value = filterFrom;
+  document.getElementById('filter-to').value   = filterTo;
 
   loadAll();
   setInterval(loadAll, 30000);  // auto-refresh every 30 seconds
