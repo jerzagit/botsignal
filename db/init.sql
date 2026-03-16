@@ -8,7 +8,7 @@ CREATE DATABASE IF NOT EXISTS botsignal
 USE botsignal;
 
 CREATE TABLE IF NOT EXISTS signals (
-    signal_id   VARCHAR(32)    PRIMARY KEY,
+    signal_id   VARCHAR(64)    PRIMARY KEY,
     received_at DATETIME       DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME       DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     symbol      VARCHAR(20)    NOT NULL,
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS signals (
 
 CREATE TABLE IF NOT EXISTS trades (
     id          INT            AUTO_INCREMENT PRIMARY KEY,
-    signal_id   VARCHAR(32),
+    signal_id   VARCHAR(64),
     ticket      BIGINT         UNIQUE,
     lot         DECIMAL(8,2),
     entry_price DECIMAL(12,5),
