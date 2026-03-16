@@ -36,7 +36,8 @@ MAX_LOT         = float(os.getenv("MAX_LOT", "0.50"))
 
 # ── Signal confirmation ───────────────────────────────────────────────────────
 # Seconds before a pending confirmation expires (default 5 min)
-SIGNAL_EXPIRY   = int(os.getenv("SIGNAL_EXPIRY", "1800"))  # 30 min — gives price time to reach entry zone
+SIGNAL_EXPIRY        = int(os.getenv("SIGNAL_EXPIRY",        "1800"))  # 30 min — gives price time to reach entry zone
+WATCH_INTERVAL_SECS  = int(os.getenv("WATCH_INTERVAL_SECS",  "30"))   # how often watcher checks price (seconds)
 
 # ── Early TP / breakeven settings ─────────────────────────────────────────────
 # Number of profitable positions to keep running at breakeven when early TP fires

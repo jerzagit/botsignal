@@ -10,10 +10,12 @@ import asyncio
 
 from telethon import TelegramClient, events
 
-from core.config  import TG_API_ID, TG_API_HASH, SIGNAL_GROUP, YOUR_CHAT_ID
-from core.signal  import parse_signal, parse_close_alert
-from core.state   import pending
-from core.notifier import send_confirmation, send_close_confirmation, get_bot
+from core.config   import TG_API_ID, TG_API_HASH, SIGNAL_GROUP, YOUR_CHAT_ID, \
+                          SIGNAL_EXPIRY, ENTRY_MAX_DISTANCE_PIPS, WATCH_INTERVAL_SECS
+from core.signal   import parse_signal, parse_close_alert
+from core.state    import pending
+from core.notifier import send_close_confirmation, get_bot
+from core.watcher  import watch_and_execute
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +78,7 @@ async def start_listener():
             f"🤖 *SignalBot is LIVE!*\n\n"
             f"👤 Logged in as: `{me.first_name}`\n"
             f"📢 Watching: *{getattr(group_entity, 'title', getattr(group_entity, 'username', '?'))}*\n"
-            f"🎯 Mode: Confirm before execute\n\n"
+            f"🎯 Mode: Auto-execute when price enters zone\n\n"
             f"_Waiting for signals..._"
         ),
         parse_mode="Markdown"
@@ -106,8 +108,34 @@ async def start_listener():
         signal_id = uuid.uuid4().hex[:8]
         pending[signal_id] = signal
         log.info(f"Signal detected: {signal.symbol} {signal.direction.upper()} → {signal_id}")
+
         from core.db import upsert_signal
         upsert_signal(signal_id, signal, status="pending")
-        await send_confirmation(bot, signal, signal_id)
+
+        # Send "watching" notification — no buttons, fully automatic
+        direction_emoji = "🟢 BUY" if signal.direction == "buy" else "🔴 SELL"
+        zone_str = (
+            f"`{signal.entry_low}`"
+            if signal.entry_low == signal.entry_high
+            else f"`{signal.entry_low} – {signal.entry_high}`"
+        )
+        tps_str = " | ".join(f"`{t}`" for t in signal.tps)
+        await bot.send_message(
+            chat_id=YOUR_CHAT_ID,
+            text=(
+                f"👀 *New signal — watching...*\n\n"
+                f"*{signal.symbol}* {direction_emoji}\n"
+                f"Entry zone: {zone_str}\n"
+                f"SL: `{signal.sl}` | TP: {tps_str}\n\n"
+                f"🎯 Will auto-execute when price is within "
+                f"`{ENTRY_MAX_DISTANCE_PIPS} pips` of entry\n"
+                f"⏳ Watching for `{SIGNAL_EXPIRY // 60} min` "
+                f"(checking every `{WATCH_INTERVAL_SECS}s`)"
+            ),
+            parse_mode="Markdown"
+        )
+
+        # Start the price watcher as a background asyncio task
+        asyncio.create_task(watch_and_execute(signal, signal_id, bot))
 
     await client.run_until_disconnected()
