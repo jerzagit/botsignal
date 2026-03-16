@@ -5,6 +5,7 @@ Run: python dashboard/app.py
 Visit: http://localhost:5000
 """
 
+import json
 import logging
 import sys
 import os
@@ -150,21 +151,21 @@ def api_signals():
     for r in rows:
         result.append({
             "signal_id":   r["signal_id"],
-            "received_at": r["received_at"].strftime("%Y-%m-%d %H:%M:%S") if r["received_at"] else None,
+            "received_at": r["received_at"].strftime("%Y-%m-%d %H:%M") if r["received_at"] else None,
             "symbol":      r["symbol"],
             "direction":   r["direction"],
-            "entry_low":   float(r["entry_low"]),
-            "entry_high":  float(r["entry_high"]),
-            "sl":          float(r["sl"]),
-            "tps":         r["tps"] if isinstance(r["tps"], list) else [],
+            "entry_low":   round(float(r["entry_low"]),  2),
+            "entry_high":  round(float(r["entry_high"]), 2),
+            "sl":          round(float(r["sl"]), 2),
+            "tps":         [round(t, 2) for t in json.loads(r["tps"])] if r["tps"] else [],
             "status":      r["status"],
             "ticket":      r["ticket"],
-            "lot":         float(r["lot"]) if r["lot"] is not None else None,
-            "entry_price": float(r["entry_price"]) if r["entry_price"] is not None else None,
+            "lot":         round(float(r["lot"]), 2) if r["lot"] is not None else None,
+            "entry_price": round(float(r["entry_price"]), 2) if r["entry_price"] is not None else None,
             "outcome":     r["outcome"],
-            "profit":      float(r["profit"]) if r["profit"] is not None else None,
-            "close_price": float(r["close_price"]) if r["close_price"] is not None else None,
-            "closed_at":   r["closed_at"].strftime("%Y-%m-%d %H:%M:%S") if r["closed_at"] else None,
+            "profit":      round(float(r["profit"]), 2) if r["profit"] is not None else None,
+            "close_price": round(float(r["close_price"]), 2) if r["close_price"] is not None else None,
+            "closed_at":   r["closed_at"].strftime("%Y-%m-%d %H:%M") if r["closed_at"] else None,
             "entry_mode":  r["entry_mode"],
             "layer_num":   r["layer_num"],
         })
@@ -243,7 +244,7 @@ def api_guards_log():
     for r in rows:
         result.append({
             "id":             r["id"],
-            "fired_at":       r["fired_at"].strftime("%Y-%m-%d %H:%M:%S") if r["fired_at"] else None,
+            "fired_at":       r["fired_at"].strftime("%Y-%m-%d %H:%M") if r["fired_at"] else None,
             "guard_name":     r["guard_name"],
             "signal_id":      r["signal_id"],
             "symbol":         r["symbol"],
