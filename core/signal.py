@@ -57,6 +57,65 @@ class Signal:
         return json.dumps(self.to_dict())
 
 
+@dataclass
+class CloseAlert:
+    symbol:   Optional[str]   # None means "all open positions"
+    reason:   str             # "setup_failed" | "early_tp"
+    raw_text: str
+
+
+def parse_close_alert(text: str) -> Optional[CloseAlert]:
+    """
+    Detect Hafiz's early-close / early-profit messages.
+
+    Supported triggers (case insensitive):
+        Setup failed:
+            "setup failed"
+            "xauusd setup failed"
+
+        Early profit / collect:
+            "profit Xpips"
+            "siapa nak collect"
+            "collect dulu"
+            "dipersialakan"
+            "take profit now"
+            "early tp"
+
+    Returns CloseAlert or None.
+    """
+    lower = text.strip().lower()
+
+    # ── Setup failed ─────────────────────────────────────────────────────────
+    if "setup failed" in lower:
+        symbol = _extract_symbol(lower)
+        return CloseAlert(symbol=symbol, reason="setup_failed", raw_text=text)
+
+    # ── Early profit / collect ────────────────────────────────────────────────
+    profit_triggers = [
+        "siapa nak collect",
+        "collect dulu",
+        "dipersilakan",
+        "take profit now",
+        "early tp",
+        re.compile(r'profit\s+\d+\s*pips?'),
+    ]
+    for trigger in profit_triggers:
+        if isinstance(trigger, str) and trigger in lower:
+            symbol = _extract_symbol(lower)
+            return CloseAlert(symbol=symbol, reason="early_tp", raw_text=text)
+        if isinstance(trigger, re.Pattern) and trigger.search(lower):
+            symbol = _extract_symbol(lower)
+            return CloseAlert(symbol=symbol, reason="early_tp", raw_text=text)
+
+    return None
+
+
+def _extract_symbol(lower: str) -> Optional[str]:
+    """Extract a trading symbol from a lowercase message string."""
+    m = re.search(r'\b(xauusd|eurusd|gbpusd|usdjpy|[a-z]{3}usd|usd[a-z]{3})\b', lower)
+    return m.group(1).upper() if m else None
+
+
 def parse_signal(text: str) -> Optional[Signal]:
     """
     Parse a Telegram message into a Signal.

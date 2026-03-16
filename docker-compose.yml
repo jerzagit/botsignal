@@ -1,0 +1,33 @@
+version: "3.9"
+
+# SignalBot — Docker Compose
+# Manages MySQL only.
+# Bot and Dashboard must run natively on Windows (MT5 IPC requirement).
+#
+# Usage:
+#   docker-compose up -d          ← start MySQL in background
+#   docker-compose down           ← stop
+#   docker-compose logs -f mysql  ← tail logs
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-docker
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: botsignal
+    ports:
+      - "3307:3306"       # host:container — access via localhost:3307
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-prootpass"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mysql_data:
+    driver: local

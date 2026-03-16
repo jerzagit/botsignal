@@ -11,9 +11,9 @@ import asyncio
 from telethon import TelegramClient, events
 
 from core.config  import TG_API_ID, TG_API_HASH, SIGNAL_GROUP, YOUR_CHAT_ID
-from core.signal  import parse_signal
+from core.signal  import parse_signal, parse_close_alert
 from core.state   import pending
-from core.notifier import send_confirmation, get_bot
+from core.notifier import send_confirmation, send_close_confirmation, get_bot
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +40,8 @@ async def resolve_group(client: TelegramClient):
     # Try username
     username = target.lstrip("@")
     entity = await client.get_entity(username)
-    log.info(f"Resolved group by username: {entity.title}")
+    name = getattr(entity, "title", None) or getattr(entity, "username", str(entity))
+    log.info(f"Resolved group by username: {name}")
     return entity
 
 
@@ -74,19 +75,29 @@ async def start_listener():
         text=(
             f"🤖 *SignalBot is LIVE!*\n\n"
             f"👤 Logged in as: `{me.first_name}`\n"
-            f"📢 Watching: *{group_entity.title}*\n"
+            f"📢 Watching: *{getattr(group_entity, 'title', getattr(group_entity, 'username', '?'))}*\n"
             f"🎯 Mode: Confirm before execute\n\n"
             f"_Waiting for signals..._"
         ),
         parse_mode="Markdown"
     )
-    log.info(f"Listening on '{group_entity.title}' as {me.first_name}")
+    group_name = getattr(group_entity, "title", getattr(group_entity, "username", str(group_entity)))
+    log.info(f"Listening on '{group_name}' as {me.first_name}")
 
     @client.on(events.NewMessage(chats=group_entity))
     async def on_new_message(event):
         text = event.raw_text
         log.info(f"Group message: {text[:100]}")
 
+        # ── Check for close alert first (setup failed / early TP) ────────────
+        alert = parse_close_alert(text)
+        if alert:
+            reason_label = "Setup Failed" if alert.reason == "setup_failed" else "Early Profit"
+            log.info(f"Close alert detected: {reason_label} symbol={alert.symbol}")
+            await send_close_confirmation(bot, alert)
+            return
+
+        # ── Check for normal trade signal ─────────────────────────────────────
         signal = parse_signal(text)
         if not signal:
             log.debug("Not a trade signal, skipping.")
@@ -95,6 +106,8 @@ async def start_listener():
         signal_id = uuid.uuid4().hex[:8]
         pending[signal_id] = signal
         log.info(f"Signal detected: {signal.symbol} {signal.direction.upper()} → {signal_id}")
+        from core.db import upsert_signal
+        upsert_signal(signal_id, signal, status="pending")
         await send_confirmation(bot, signal, signal_id)
 
     await client.run_until_disconnected()

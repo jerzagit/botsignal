@@ -7,3 +7,6 @@ from core.signal import Signal
 
 # Signals waiting for user confirmation: {signal_id: Signal}
 pending: dict[str, Signal] = {}
+
+# Close alerts waiting for user confirmation: {close_id: [ticket, ...]}
+pending_closes: dict[str, list] = {}

@@ -10,7 +10,9 @@ from pathlib import Path
 
 import MetaTrader5 as mt5
 
-from core.config import MT5_LOGIN, MT5_PASSWORD, MT5_SERVER
+from core.config import MT5_PATH, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_SYMBOL_SUFFIX, \
+                       SL_PIP_SIZE, ENTRY_MAX_DISTANCE_PIPS, MIN_MARGIN_LEVEL, \
+                       MAX_SPREAD_PIPS, MIN_RR_RATIO, BLOCK_SAME_DIRECTION_STACK
 from core.signal import Signal
 from core.risk   import calculate_lot
 
@@ -22,7 +24,8 @@ TRADE_LOG = Path("data/trades.json")
 
 def mt5_connect() -> bool:
     """Connect and login to MT5. Returns True on success."""
-    if not mt5.initialize():
+    kwargs = {"path": MT5_PATH} if MT5_PATH else {}
+    if not mt5.initialize(**kwargs):
         log.error(f"MT5 initialize() failed: {mt5.last_error()}")
         return False
     if not mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
@@ -48,7 +51,7 @@ def mt5_connect_test() -> tuple[bool, str]:
 
 # ── Trade execution ───────────────────────────────────────────────────────────
 
-def execute_trade(signal: Signal) -> str:
+def execute_trade(signal: Signal, signal_id: str = None) -> str:
     """
     Place a market order on MT5 for the given signal.
     Lot size is auto-calculated from margin % risk.
@@ -58,7 +61,52 @@ def execute_trade(signal: Signal) -> str:
     if not mt5_connect():
         return "❌ Could not connect to MT5."
 
-    symbol = signal.symbol
+    symbol = signal.symbol + MT5_SYMBOL_SUFFIX
+
+    # ── GUARD 1: Account info ─────────────────────────────────────────────────
+    account = mt5.account_info()
+    if account is None:
+        mt5.shutdown()
+        return "❌ Could not retrieve account info from MT5."
+
+    # ── GUARD 2: Margin level — must be above MIN_MARGIN_LEVEL ───────────────
+    # Skipped when margin=0 (no open trades yet — first trade always allowed)
+    if account.margin > 0 and account.margin_level < MIN_MARGIN_LEVEL:
+        mt5.shutdown()
+        return (
+            f"❌ *Trade blocked — margin level too low*\n"
+            f"Current: `{account.margin_level:.1f}%` | Required: `≥ {MIN_MARGIN_LEVEL:.0f}%`\n"
+            f"_Close some open positions to free up margin._"
+        )
+
+    # ── GUARD 3: Same-direction stack — don't double up on small account ─────
+    if BLOCK_SAME_DIRECTION_STACK:
+        existing = mt5.positions_get(symbol=symbol) or []
+        same_type = mt5.ORDER_TYPE_BUY if signal.direction == "buy" else mt5.ORDER_TYPE_SELL
+        stacked = [p for p in existing if p.type == same_type]
+        if stacked:
+            mt5.shutdown()
+            return (
+                f"⚠️ *Trade blocked — already have {len(stacked)} "
+                f"{signal.direction.upper()} position(s) on `{symbol}`*\n"
+                f"Stacking same direction doubles your exposure.\n"
+                f"_Close existing trade or wait for it to close first._"
+            )
+
+    # ── GUARD 4: TP:SL ratio — signal must be mathematically worth taking ────
+    sl_distance = abs(signal.entry_mid - signal.sl)
+    tp_distance = abs(signal.tps[0] - signal.entry_mid) if signal.tps else 0
+    rr_ratio    = tp_distance / sl_distance if sl_distance > 0 else 0
+    if rr_ratio < MIN_RR_RATIO:
+        mt5.shutdown()
+        sl_pips = sl_distance / SL_PIP_SIZE
+        tp_pips = tp_distance / SL_PIP_SIZE
+        return (
+            f"⚠️ *Trade blocked — poor reward:risk ratio*\n"
+            f"SL: `{sl_pips:.0f} pips` | TP1: `{tp_pips:.0f} pips` | "
+            f"Ratio: `{rr_ratio:.2f}:1`\n"
+            f"_Minimum required: `{MIN_RR_RATIO:.1f}:1` — not worth the risk._"
+        )
 
     # Ensure symbol is visible in Market Watch
     info = mt5.symbol_info(symbol)
@@ -68,12 +116,6 @@ def execute_trade(signal: Signal) -> str:
     if not info.visible:
         mt5.symbol_select(symbol, True)
 
-    # Auto lot size from risk %
-    lot, lot_explanation = calculate_lot(signal)
-    if lot == 0.0:
-        mt5.shutdown()
-        return f"❌ Lot calculation failed:\n{lot_explanation}"
-
     # Current market price
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
@@ -82,7 +124,40 @@ def execute_trade(signal: Signal) -> str:
 
     order_type = mt5.ORDER_TYPE_BUY if signal.direction == "buy" else mt5.ORDER_TYPE_SELL
     price      = tick.ask if signal.direction == "buy" else tick.bid
-    tp         = signal.tps[0]   # MT5 manages TP1; remaining TPs noted for manual management
+    tp         = signal.tps[0]
+
+    # ── GUARD 5: Spread — block if broker spread is unusually wide ───────────
+    spread_pips = (tick.ask - tick.bid) / SL_PIP_SIZE
+    if spread_pips > MAX_SPREAD_PIPS:
+        mt5.shutdown()
+        return (
+            f"⏳ *Trade blocked — spread too wide*\n"
+            f"Current spread: `{spread_pips:.1f} pips` | Max allowed: `{MAX_SPREAD_PIPS:.0f} pips`\n"
+            f"_Likely news event or off-hours. Wait for spread to normalise._"
+        )
+
+    # ── GUARD 6: Entry proximity — price must be near Hafiz's entry zone ─────
+    distance_pts  = max(0.0, max(signal.entry_low - price, price - signal.entry_high))
+    distance_pips = distance_pts / SL_PIP_SIZE
+    if distance_pips > ENTRY_MAX_DISTANCE_PIPS:
+        mt5.shutdown()
+        zone_str = (
+            f"{signal.entry_low}"
+            if signal.entry_low == signal.entry_high
+            else f"{signal.entry_low}–{signal.entry_high}"
+        )
+        return (
+            f"⏳ *Trade skipped — price too far from entry zone*\n"
+            f"Current price: `{price}` | Entry zone: `{zone_str}`\n"
+            f"Distance: `{distance_pips:.0f} pips` (max: `{ENTRY_MAX_DISTANCE_PIPS} pips`)\n"
+            f"_Signal came early — tap again when price is closer._"
+        )
+
+    # Auto lot size from risk %
+    lot, lot_explanation = calculate_lot(signal)
+    if lot == 0.0:
+        mt5.shutdown()
+        return f"❌ Lot calculation failed:\n{lot_explanation}"
 
     request = {
         "action":       mt5.TRADE_ACTION_DEAL,
@@ -109,8 +184,11 @@ def execute_trade(signal: Signal) -> str:
             f"Reason: `{result.comment}`"
         )
 
-    # Log the trade to data/trades.json for dashboard later
+    # Log the trade to data/trades.json and MySQL dashboard
     _log_trade(signal, lot, price, result.order)
+    if signal_id:
+        from core.db import record_trade
+        record_trade(signal_id, result.order, lot, price)
 
     direction_emoji = "🔴" if signal.direction == "sell" else "🟢"
     tps_str = " → ".join(str(t) for t in signal.tps)
@@ -124,6 +202,177 @@ def execute_trade(signal: Signal) -> str:
         f"{lot_explanation}\n\n"
         f"🎫 Ticket: `{result.order}`"
     )
+
+
+# ── Close position ────────────────────────────────────────────────────────────
+
+def close_position(ticket: int) -> str:
+    """Close an open position by ticket number at market price."""
+    if not mt5_connect():
+        return "❌ Could not connect to MT5."
+
+    positions = mt5.positions_get(ticket=ticket)
+    if not positions:
+        mt5.shutdown()
+        return f"❌ Position #{ticket} not found (may already be closed)."
+
+    pos   = positions[0]
+    tick  = mt5.symbol_info_tick(pos.symbol)
+    if tick is None:
+        mt5.shutdown()
+        return f"❌ Could not get price for {pos.symbol}."
+
+    # To close: BUY position → sell; SELL position → buy
+    order_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
+    price      = tick.bid if pos.type == 0 else tick.ask
+
+    request = {
+        "action":       mt5.TRADE_ACTION_DEAL,
+        "symbol":       pos.symbol,
+        "volume":       pos.volume,
+        "type":         order_type,
+        "position":     ticket,
+        "price":        price,
+        "deviation":    20,
+        "magic":        20250101,
+        "comment":      "SignalBot Close",
+        "type_time":    mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+
+    result = mt5.order_send(request)
+    mt5.shutdown()
+
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        return f"❌ Close failed: `{result.comment}` (code `{result.retcode}`)"
+
+    direction = "BUY" if pos.type == 0 else "SELL"
+    return (
+        f"✅ *Position Closed*\n"
+        f"`{pos.symbol} {direction}` | Ticket: `#{ticket}`\n"
+        f"Closed @ `{price}` | Lot: `{pos.volume}`"
+    )
+
+
+def set_breakeven(ticket: int) -> str:
+    """Move a position's SL to its entry price (breakeven)."""
+    if not mt5_connect():
+        return "❌ Could not connect to MT5."
+
+    positions = mt5.positions_get(ticket=ticket)
+    if not positions:
+        mt5.shutdown()
+        return f"❌ Position #{ticket} not found."
+
+    pos = positions[0]
+    entry = pos.price_open
+
+    request = {
+        "action":   mt5.TRADE_ACTION_SLTP,
+        "position": ticket,
+        "sl":       entry,
+        "tp":       pos.tp,
+    }
+
+    result = mt5.order_send(request)
+    mt5.shutdown()
+
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        return f"❌ Breakeven failed #{ticket}: `{result.comment}`"
+
+    direction = "BUY" if pos.type == 0 else "SELL"
+    return f"🔒 Breakeven set — `{pos.symbol} {direction}` #{ticket} SL → `{entry}`"
+
+
+def get_open_signal_groups(symbol: str = None) -> list:
+    """
+    Return open MT5 positions grouped by their signal_id from MySQL.
+    Each group is a dict with signal info + list of open positions + total P&L.
+
+    If symbol is given, filter to that symbol only.
+    Positions not in MySQL (manual trades) are grouped under signal_id=None.
+    """
+    if not mt5_connect():
+        return []
+
+    # Get all open positions from MT5
+    all_positions = mt5.positions_get()
+    mt5.shutdown()
+
+    if not all_positions:
+        return []
+
+    if symbol:
+        suffix = MT5_SYMBOL_SUFFIX
+        target = symbol.upper() + suffix
+        all_positions = [p for p in all_positions if p.symbol == target]
+
+    if not all_positions:
+        return []
+
+    # Build ticket → position map
+    ticket_map = {p.ticket: p for p in all_positions}
+    open_tickets = list(ticket_map.keys())
+
+    # Look up these tickets in MySQL to get signal groupings
+    groups = {}   # signal_id → {signal_info, positions[]}
+
+    try:
+        from core.db import get_conn
+        conn = get_conn()
+        placeholders = ",".join(["%s"] * len(open_tickets))
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT t.ticket, t.signal_id, t.lot, t.entry_price,
+                       s.received_at, s.symbol, s.direction,
+                       s.entry_low, s.entry_high, s.sl, s.tps
+                FROM trades t
+                JOIN signals s ON t.signal_id = s.signal_id
+                WHERE t.ticket IN ({placeholders}) AND t.outcome IS NULL
+            """, open_tickets)
+            rows = cur.fetchall()
+        conn.close()
+
+        for row in rows:
+            sid = row["signal_id"]
+            if sid not in groups:
+                groups[sid] = {
+                    "signal_id":  sid,
+                    "received_at": row["received_at"],
+                    "symbol":     row["symbol"],
+                    "direction":  row["direction"],
+                    "entry_low":  float(row["entry_low"]),
+                    "entry_high": float(row["entry_high"]),
+                    "sl":         float(row["sl"]),
+                    "positions":  [],
+                    "total_pnl":  0.0,
+                }
+            pos = ticket_map[row["ticket"]]
+            groups[sid]["positions"].append(pos)
+            groups[sid]["total_pnl"] = round(
+                groups[sid]["total_pnl"] + pos.profit, 2
+            )
+            del ticket_map[row["ticket"]]
+
+    except Exception as e:
+        log.error(f"get_open_signal_groups DB error: {e}")
+
+    # Any remaining tickets (not in MySQL = manual trades)
+    for ticket, pos in ticket_map.items():
+        sid = f"manual_{ticket}"
+        groups[sid] = {
+            "signal_id":  sid,
+            "received_at": None,
+            "symbol":     pos.symbol,
+            "direction":  "buy" if pos.type == 0 else "sell",
+            "entry_low":  pos.price_open,
+            "entry_high": pos.price_open,
+            "sl":         pos.sl,
+            "positions":  [pos],
+            "total_pnl":  round(pos.profit, 2),
+        }
+
+    return list(groups.values())
 
 
 # ── Trade log (feeds dashboard later) ────────────────────────────────────────

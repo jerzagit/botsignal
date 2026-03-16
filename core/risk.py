@@ -16,7 +16,8 @@ automatically scaling down when your account shrinks and up when it grows.
 import logging
 import MetaTrader5 as mt5
 
-from core.config import RISK_PERCENT, MIN_LOT, MAX_LOT
+from core.config import RISK_PERCENT, MIN_LOT, MAX_LOT, MT5_SYMBOL_SUFFIX, \
+                       SL_PIP_SIZE, SL_WARN_MIN_PIPS, SL_WARN_MAX_PIPS
 from core.signal import Signal
 
 log = logging.getLogger(__name__)
@@ -40,9 +41,9 @@ def calculate_lot(signal: Signal) -> tuple[float, str]:
         return 0.0, "❌ No free margin available."
 
     # ── Get symbol info ───────────────────────────────────────────────────────
-    sym_info = mt5.symbol_info(signal.symbol)
+    sym_info = mt5.symbol_info(signal.symbol + MT5_SYMBOL_SUFFIX)
     if sym_info is None:
-        return 0.0, f"❌ Symbol {signal.symbol} not found."
+        return 0.0, f"❌ Symbol {signal.symbol + MT5_SYMBOL_SUFFIX} not found."
 
     tick_size  = sym_info.trade_tick_size    # e.g. 0.01 for XAUUSD
     tick_value = sym_info.trade_tick_value   # USD value of 1 tick on 1 lot
@@ -54,38 +55,60 @@ def calculate_lot(signal: Signal) -> tuple[float, str]:
     # ── Calculate risk amount ─────────────────────────────────────────────────
     risk_amount = free_margin * RISK_PERCENT
 
-    # ── SL distance in price units ────────────────────────────────────────────
-    entry_ref  = signal.entry_mid
+    # ── SL distance in price units and pips ──────────────────────────────────
+    entry_ref   = signal.entry_mid
     sl_distance = abs(entry_ref - signal.sl)
     if sl_distance == 0:
         return 0.0, "❌ SL distance is zero — cannot calculate lot."
 
+    sl_pips = sl_distance / SL_PIP_SIZE
+
     # ── Convert SL distance to monetary risk per lot ──────────────────────────
-    # ticks in SL distance × tick_value = $ risk per lot
-    sl_in_ticks   = sl_distance / tick_size
-    risk_per_lot  = sl_in_ticks * tick_value
+    sl_in_ticks  = sl_distance / tick_size
+    risk_per_lot = sl_in_ticks * tick_value
 
     if risk_per_lot == 0:
         return 0.0, "❌ Risk per lot is zero — check symbol tick values."
 
     # ── Raw lot size ──────────────────────────────────────────────────────────
-    raw_lot = risk_amount / risk_per_lot
+    raw_lot  = risk_amount / risk_per_lot
+    vol_step = sym_info.volume_step
+    lot      = max(MIN_LOT, min(MAX_LOT, raw_lot))
+    lot      = round(round(lot / vol_step) * vol_step, 2)
 
-    # ── Clamp and round to broker's volume step ───────────────────────────────
-    vol_step = sym_info.volume_step  # e.g. 0.01
-    lot = max(MIN_LOT, min(MAX_LOT, raw_lot))
-    lot = round(round(lot / vol_step) * vol_step, 2)
+    # ── Warnings ──────────────────────────────────────────────────────────────
+    warnings = []
+
+    if sl_pips < SL_WARN_MIN_PIPS:
+        warnings.append(
+            f"⚠️ *SL unusually tight* — `{sl_pips:.0f} pips` "
+            f"(normal: {SL_WARN_MIN_PIPS}–{SL_WARN_MAX_PIPS} pips)"
+        )
+    elif sl_pips > SL_WARN_MAX_PIPS:
+        warnings.append(
+            f"⚠️ *SL unusually wide* — `{sl_pips:.0f} pips` "
+            f"(normal: {SL_WARN_MIN_PIPS}–{SL_WARN_MAX_PIPS} pips)"
+        )
+
+    if raw_lot < MIN_LOT:
+        warnings.append(
+            f"⚠️ *Margin tight* — calculated `{raw_lot:.4f}` lots, "
+            f"using minimum `{MIN_LOT}`"
+        )
+
+    warning_str = "\n".join(warnings) + "\n" if warnings else ""
 
     explanation = (
+        f"{warning_str}"
         f"💰 Free margin: `${free_margin:,.2f}`\n"
-        f"⚠️ Risk: `{RISK_PERCENT*100:.0f}%` = `${risk_amount:,.2f}`\n"
-        f"📏 SL distance: `{sl_distance}` price units\n"
-        f"📦 Calculated lot: `{lot}`"
+        f"📊 Risk: `{RISK_PERCENT*100:.0f}%` → `${risk_amount:,.2f}`\n"
+        f"📏 SL: `{sl_pips:.0f} pips` ({sl_distance:.2f} pts)\n"
+        f"📦 Lot: `{lot}`"
     )
 
     log.info(
         f"Lot calc | margin={free_margin:.2f} risk={risk_amount:.2f} "
-        f"sl_dist={sl_distance} risk/lot={risk_per_lot:.2f} → lot={lot}"
+        f"sl={sl_pips:.0f}pips risk/lot={risk_per_lot:.2f} raw={raw_lot:.4f} → lot={lot}"
     )
 
     return lot, explanation

@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SignalBot Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; color: #222; }
+
+    header {
+      background: #1a1a2e; color: white; padding: 16px 24px;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    header h1 { font-size: 1.3rem; letter-spacing: 1px; }
+    header span { font-size: 0.8rem; color: #aaa; }
+
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px 16px; }
+
+    /* Stat cards */
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin-bottom: 20px; }
+    .card {
+      background: white; border-radius: 10px; padding: 18px 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.07); text-align: center;
+    }
+    .card .label { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+    .card .value { font-size: 1.8rem; font-weight: 700; }
+    .card.green .value { color: #16a34a; }
+    .card.red   .value { color: #dc2626; }
+    .card.blue  .value { color: #2563eb; }
+    .card.orange .value { color: #ea580c; }
+
+    /* P&L bar */
+    .pnl-bar {
+      background: white; border-radius: 10px; padding: 14px 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+      display: flex; gap: 32px; align-items: center; margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+    .pnl-bar .item { display: flex; flex-direction: column; }
+    .pnl-bar .item .lbl { font-size: 0.72rem; color: #888; text-transform: uppercase; }
+    .pnl-bar .item .val { font-size: 1.1rem; font-weight: 600; }
+    .pnl-bar .item .val.pos { color: #16a34a; }
+    .pnl-bar .item .val.neg { color: #dc2626; }
+
+    /* Table */
+    .section-title { font-size: 0.85rem; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+    .table-wrap { background: white; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.07); overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th { background: #1a1a2e; color: white; padding: 10px 12px; text-align: left; font-weight: 500; }
+    td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+    tr:last-child td { border-bottom: none; }
+    tr.trade-row { background: #fafafa; }
+    tr.trade-row td { padding: 6px 12px 10px 12px; font-size: 0.8rem; color: #555; }
+    tr:hover > td { background: #f5f7ff; }
+
+    /* Badges */
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 12px;
+      font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .badge.executed { background: #dbeafe; color: #1d4ed8; }
+    .badge.skipped  { background: #f3f4f6; color: #6b7280; }
+    .badge.expired  { background: #ffedd5; color: #c2410c; }
+    .badge.pending  { background: #fef9c3; color: #854d0e; }
+    .badge.buy      { background: #dcfce7; color: #15803d; }
+    .badge.sell     { background: #fee2e2; color: #b91c1c; }
+    .badge.win      { background: #dcfce7; color: #15803d; }
+    .badge.loss     { background: #fee2e2; color: #b91c1c; }
+    .badge.open     { background: #f3f4f6; color: #6b7280; }
+    .badge.manual   { background: #ede9fe; color: #6d28d9; }
+
+    .tps { color: #555; }
+    .empty { text-align: center; padding: 40px; color: #aaa; }
+
+    @media (max-width: 700px) {
+      table { font-size: 0.75rem; }
+      th, td { padding: 8px 6px; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>SignalBot Dashboard</h1>
+  <span id="last-updated">Loading...</span>
+</header>
+
+<div class="container">
+
+  <!-- Stat Cards -->
+  <div class="cards">
+    <div class="card">
+      <div class="label">Total Signals</div>
+      <div class="value" id="total-signals">—</div>
+    </div>
+    <div class="card blue">
+      <div class="label">Executed</div>
+      <div class="value" id="executed">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Skipped</div>
+      <div class="value" id="skipped">—</div>
+    </div>
+    <div class="card orange">
+      <div class="label">Expired</div>
+      <div class="value" id="expired">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Open Trades</div>
+      <div class="value" id="open-trades">—</div>
+    </div>
+    <div class="card green">
+      <div class="label">Win Rate</div>
+      <div class="value" id="win-rate">—</div>
+    </div>
+  </div>
+
+  <!-- P&L Bar -->
+  <div class="pnl-bar">
+    <div class="item">
+      <span class="lbl">Wins</span>
+      <span class="val" id="wins">—</span>
+    </div>
+    <div class="item">
+      <span class="lbl">Losses</span>
+      <span class="val" id="losses">—</span>
+    </div>
+    <div class="item">
+      <span class="lbl">Total P&L</span>
+      <span class="val" id="total-profit">—</span>
+    </div>
+  </div>
+
+  <!-- Signal Log Table -->
+  <div class="section-title">Signal Log</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Symbol</th>
+          <th>Direction</th>
+          <th>Entry Zone</th>
+          <th>SL</th>
+          <th>TPs</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="signal-table-body">
+        <tr><td colspan="7" class="empty">Loading signals...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+
+<script>
+  function fmt(n, dp = 2) {
+    return n !== null && n !== undefined ? Number(n).toFixed(dp) : '—';
+  }
+
+  function statusBadge(s) {
+    return `<span class="badge ${s}">${s}</span>`;
+  }
+
+  function dirBadge(d) {
+    return `<span class="badge ${d}">${d.toUpperCase()}</span>`;
+  }
+
+  function outcomeBadge(o) {
+    if (!o) return '<span class="badge open">Open</span>';
+    return `<span class="badge ${o}">${o.toUpperCase()}</span>`;
+  }
+
+  function loadStats() {
+    fetch('/api/stats')
+      .then(r => r.json())
+      .then(d => {
+        document.getElementById('total-signals').textContent = d.total_signals;
+        document.getElementById('executed').textContent      = d.executed;
+        document.getElementById('skipped').textContent       = d.skipped;
+        document.getElementById('expired').textContent       = d.expired;
+        document.getElementById('open-trades').textContent   = d.open_trades;
+        document.getElementById('win-rate').textContent      = d.win_rate + '%';
+        document.getElementById('wins').textContent          = d.wins;
+        document.getElementById('losses').textContent        = d.losses;
+
+        const pnl = d.total_profit;
+        const el  = document.getElementById('total-profit');
+        el.textContent  = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+        el.className    = 'val ' + (pnl >= 0 ? 'pos' : 'neg');
+      });
+  }
+
+  function loadSignals() {
+    fetch('/api/signals')
+      .then(r => r.json())
+      .then(rows => {
+        const tbody = document.getElementById('signal-table-body');
+        if (!rows.length) {
+          tbody.innerHTML = '<tr><td colspan="7" class="empty">No signals yet. Waiting for signals from the group...</td></tr>';
+          return;
+        }
+
+        let html = '';
+        rows.forEach(s => {
+          const entry = s.entry_low === s.entry_high
+            ? fmt(s.entry_low, 5)
+            : `${fmt(s.entry_low, 5)} – ${fmt(s.entry_high, 5)}`;
+
+          const tpsStr = Array.isArray(s.tps)
+            ? s.tps.map((t, i) => `TP${i+1}: ${fmt(t, 5)}`).join(' &nbsp;')
+            : '—';
+
+          html += `
+            <tr>
+              <td>${s.received_at || '—'}</td>
+              <td><strong>${s.symbol}</strong></td>
+              <td>${dirBadge(s.direction)}</td>
+              <td>${entry}</td>
+              <td>${fmt(s.sl, 5)}</td>
+              <td class="tps">${tpsStr}</td>
+              <td>${statusBadge(s.status)}</td>
+            </tr>`;
+
+          if (s.status === 'executed' && s.ticket) {
+            const prof = s.profit !== null
+              ? `<strong style="color:${s.profit >= 0 ? '#16a34a' : '#dc2626'}">${s.profit >= 0 ? '+' : ''}$${fmt(s.profit, 2)}</strong>`
+              : '—';
+            html += `
+              <tr class="trade-row">
+                <td colspan="7">
+                  &nbsp;&nbsp;🎫 Ticket: <strong>${s.ticket}</strong>
+                  &nbsp;|&nbsp; Lot: ${fmt(s.lot, 2)}
+                  &nbsp;|&nbsp; Entry: ${fmt(s.entry_price, 5)}
+                  &nbsp;|&nbsp; Outcome: ${outcomeBadge(s.outcome)}
+                  ${s.profit !== null ? `&nbsp;|&nbsp; P&L: ${prof}` : ''}
+                  ${s.close_price ? `&nbsp;|&nbsp; Close: ${fmt(s.close_price, 5)}` : ''}
+                  ${s.closed_at ? `&nbsp;|&nbsp; Closed: ${s.closed_at}` : ''}
+                </td>
+              </tr>`;
+          }
+        });
+
+        tbody.innerHTML = html;
+      });
+  }
+
+  function loadAll() {
+    loadStats();
+    loadSignals();
+    document.getElementById('last-updated').textContent =
+      'Last updated: ' + new Date().toLocaleTimeString();
+  }
+
+  loadAll();
+  setInterval(loadAll, 30000);  // auto-refresh every 30 seconds
+</script>
+
+</body>
+</html>

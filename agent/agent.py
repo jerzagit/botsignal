@@ -103,7 +103,7 @@ async def agent_handle_signal(signal: Signal, signal_id: str):
         )
 
         # Execute
-        result = await asyncio.get_event_loop().run_in_executor(None, execute_trade, signal)
+        result = await asyncio.get_event_loop().run_in_executor(None, execute_trade, signal, signal_id)
         await bot.send_message(chat_id=YOUR_CHAT_ID, text=result, parse_mode="Markdown")
 
     else:
