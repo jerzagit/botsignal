@@ -62,17 +62,18 @@ def upsert_signal(signal_id: str, signal, status: str = "pending"):
         log.error(f"db.upsert_signal failed: {e}")
 
 
-def record_trade(signal_id: str, ticket: int, lot: float, entry_price: float):
+def record_trade(signal_id: str, ticket: int, lot: float, entry_price: float,
+                 entry_mode: str = None, layer_num: int = None):
     """Insert a trade row right after MT5 confirms execution."""
     sql = """
-        INSERT INTO trades (signal_id, ticket, lot, entry_price)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO trades (signal_id, ticket, lot, entry_price, entry_mode, layer_num)
+        VALUES (%s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE ticket = ticket
     """
     try:
         conn = get_conn()
         with conn.cursor() as cur:
-            cur.execute(sql, (signal_id, ticket, lot, entry_price))
+            cur.execute(sql, (signal_id, ticket, lot, entry_price, entry_mode, layer_num))
         conn.close()
     except Exception as e:
         log.error(f"db.record_trade failed: {e}")

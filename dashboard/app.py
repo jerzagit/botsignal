@@ -103,7 +103,9 @@ def api_signals():
                 t.outcome,
                 t.profit,
                 t.close_price,
-                t.closed_at
+                t.closed_at,
+                t.entry_mode,
+                t.layer_num
             FROM signals s
             LEFT JOIN trades t ON s.signal_id = t.signal_id
             ORDER BY s.received_at DESC
@@ -131,6 +133,8 @@ def api_signals():
             "profit":      float(r["profit"]) if r["profit"] is not None else None,
             "close_price": float(r["close_price"]) if r["close_price"] is not None else None,
             "closed_at":   r["closed_at"].strftime("%Y-%m-%d %H:%M:%S") if r["closed_at"] else None,
+            "entry_mode":  r["entry_mode"],
+            "layer_num":   r["layer_num"],
         })
 
     return jsonify(result)

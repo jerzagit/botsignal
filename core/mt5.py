@@ -68,7 +68,9 @@ def execute_trade(signal: Signal, signal_id: str = None,
                   lot_override: float = None,
                   own_tickets: list = None,
                   tp_override: float = None,
-                  skip_proximity: bool = False) -> str:
+                  skip_proximity: bool = False,
+                  entry_mode: str = None,
+                  layer_num: int = None) -> str:
     """
     Place a market order on MT5 for the given signal.
 
@@ -77,6 +79,8 @@ def execute_trade(signal: Signal, signal_id: str = None,
       own_tickets    – exempt these tickets from the stack guard (own session layers)
       tp_override    – place a single order with this TP (skips TRADE_SPLIT loop)
       skip_proximity – skip proximity guard (L2+ are intentionally outside zone)
+      entry_mode     – 'layered_dca' | 'direct' | None (stored in DB for dashboard)
+      layer_num      – 1/2/3… for DCA layers; None for direct trades
 
     Returns a human-readable result message.
     """
@@ -261,7 +265,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
         from core.db import record_trade
         _log_trade(signal, lot, price, r.order)
         if signal_id:
-            record_trade(signal_id, r.order, lot, price)
+            record_trade(signal_id, r.order, lot, price, entry_mode, layer_num)
         return (
             f"✅ *Trade Executed!*\n\n"
             f"{direction_emoji} `{symbol} {signal.direction.upper()}`\n"
@@ -317,7 +321,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
     for ticket, _ in tickets:
         _log_trade(signal, split_lot, price, ticket)
         if signal_id:
-            record_trade(signal_id, ticket, split_lot, price)
+            record_trade(signal_id, ticket, split_lot, price, entry_mode, layer_num)
 
     tps_str  = " → ".join(str(t) for t in signal.tps)
     tick_lines = "\n".join(

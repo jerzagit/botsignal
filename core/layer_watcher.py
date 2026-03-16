@@ -390,6 +390,8 @@ async def watch_layered_entry(signal, signal_id: str, bot):
                     own_tix,            # own_tickets (exempt from stack guard)
                     tp_val,             # tp_override → single-order mode
                     next_idx > 0,       # skip_proximity for L2+
+                    'layered_dca',      # entry_mode
+                    layer_num,          # layer_num
                 )
 
                 if "Trade Executed" in result:

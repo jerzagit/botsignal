@@ -115,6 +115,8 @@
     .badge.spread  { background: #ffedd5; color: #c2410c; }
     .badge.proximity { background: #dbeafe; color: #1d4ed8; }
     .badge.lot_calc  { background: #f3f4f6; color: #6b7280; }
+    .badge.dca       { background: #dbeafe; color: #1e40af; font-weight: 600; }
+    .badge.direct    { background: #f3f4f6; color: #374151; }
 
     @media (max-width: 700px) {
       table { font-size: 0.75rem; }
@@ -299,6 +301,12 @@
     return `<span class="badge ${o}">${o.toUpperCase()}</span>`;
   }
 
+  function entryBadge(mode, layerNum) {
+    if (mode === 'layered_dca') return `<span class="badge dca">DCA L${layerNum || '?'}</span>`;
+    if (mode === 'direct')      return `<span class="badge direct">DIRECT</span>`;
+    return '';
+  }
+
   function loadStats() {
     fetch('/api/stats')
       .then(r => r.json())
@@ -358,6 +366,7 @@
               <tr class="trade-row">
                 <td colspan="7">
                   &nbsp;&nbsp;🎫 Ticket: <strong>${s.ticket}</strong>
+                  ${entryBadge(s.entry_mode, s.layer_num)}
                   &nbsp;|&nbsp; Lot: ${fmt(s.lot, 2)}
                   &nbsp;|&nbsp; Entry: ${fmt(s.entry_price, 5)}
                   &nbsp;|&nbsp; Outcome: ${outcomeBadge(s.outcome)}
