@@ -94,7 +94,11 @@ async def start_listener():
         # ── Check for close alert first (setup failed / early TP) ────────────
         alert = parse_close_alert(text)
         if alert:
-            reason_label = "Setup Failed" if alert.reason == "setup_failed" else "Early Profit"
+            reason_label = (
+                "Setup Failed"   if alert.reason == "setup_failed"  else
+                "Collect Profit" if alert.reason == "collect_profit" else
+                "Early Profit"
+            )
             log.info(f"Close alert detected: {reason_label} symbol={alert.symbol}")
             await send_close_confirmation(bot, alert)
             return

@@ -60,7 +60,7 @@ class Signal:
 @dataclass
 class CloseAlert:
     symbol:   Optional[str]   # None means "all open positions"
-    reason:   str             # "setup_failed" | "early_tp"
+    reason:   str             # "setup_failed" | "early_tp" | "collect_profit"
     raw_text: str
 
 
@@ -90,7 +90,19 @@ def parse_close_alert(text: str) -> Optional[CloseAlert]:
         symbol = _extract_symbol(lower)
         return CloseAlert(symbol=symbol, reason="setup_failed", raw_text=text)
 
-    # ── Early profit / collect ────────────────────────────────────────────────
+    # ── Collect profit (70% close, 30% breakeven) ─────────────────────────────
+    collect_triggers = [
+        "collect profit",
+        "mau collect",
+        "siapa mau collect",
+        "collect and",
+    ]
+    for trigger in collect_triggers:
+        if trigger in lower:
+            symbol = _extract_symbol(lower)
+            return CloseAlert(symbol=symbol, reason="collect_profit", raw_text=text)
+
+    # ── Early profit (keep top N at breakeven, close rest) ───────────────────
     profit_triggers = [
         "siapa nak collect",
         "collect dulu",

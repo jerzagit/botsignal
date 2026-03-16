@@ -82,7 +82,9 @@ async def send_close_confirmation(bot, alert):
         )
         return
 
-    if alert.reason == "early_tp":
+    if alert.reason == "collect_profit":
+        await _send_collect_profit_plan(bot, alert, groups)
+    elif alert.reason == "early_tp":
         await _send_early_tp_plan(bot, alert, groups)
     else:
         await _send_setup_failed_options(bot, alert, groups)
@@ -124,6 +126,79 @@ async def _send_setup_failed_options(bot, alert, groups):
         reply_markup=InlineKeyboardMarkup([[b] for b in buttons]),
     )
     log.info(f"Setup-failed confirmation sent — {len(groups)} group(s)")
+
+
+async def _send_collect_profit_plan(bot, alert, groups):
+    """
+    Collect profit: 70% close (most profitable first), 30% breakeven (free ride).
+    Losing positions untouched.
+    """
+    all_positions = [p for g in groups for p in g["positions"]]
+
+    profitable = sorted(
+        [p for p in all_positions if p.profit > 0],
+        key=lambda p: p.profit, reverse=True   # most profitable first
+    )
+    losers = [p for p in all_positions if p.profit <= 0]
+
+    if not profitable:
+        sym_label = alert.symbol or "all symbols"
+        await bot.send_message(
+            chat_id=YOUR_CHAT_ID,
+            text=(
+                f"💰 *Collect Profit* — no profitable positions found for {sym_label}.\n"
+                f"_Nothing to close._"
+            ),
+            parse_mode="Markdown"
+        )
+        return
+
+    n          = len(profitable)
+    keep_count = max(1, round(n * 0.3))   # 30% keep at breakeven (min 1)
+    to_close   = profitable[:-keep_count] if keep_count < n else []
+    keep_be    = profitable[-keep_count:]  # least profitable of the winners → breakeven
+
+    lines = [f"💰 *Collect Profit Plan* — {alert.symbol or 'all'}\n",
+             f"_70% secure · 30% breakeven_\n"]
+
+    if to_close:
+        lines.append(f"💵 *CLOSE* — lock in profit ({len(to_close)} position{'s' if len(to_close)>1 else ''}):")
+        for p in to_close:
+            sign = "+" if p.profit >= 0 else ""
+            lines.append(f"  `#{p.ticket}` | {p.symbol} | `{sign}${p.profit:.2f}`")
+
+    if keep_be:
+        lines.append(f"\n🔒 *BREAKEVEN* — free ride ({len(keep_be)} position{'s' if len(keep_be)>1 else ''}):")
+        for p in keep_be:
+            sign = "+" if p.profit >= 0 else ""
+            lines.append(f"  `#{p.ticket}` | {p.symbol} | `{sign}${p.profit:.2f}` | Entry: `{p.price_open}`")
+
+    if losers:
+        lines.append(f"\n🔵 *UNTOUCHED* — in loss, original SL stays ({len(losers)}):")
+        for p in losers:
+            lines.append(f"  `#{p.ticket}` | {p.symbol} | `-${abs(p.profit):.2f}`")
+
+    plan_id = f"cp_{alert.symbol or 'ALL'}"
+    pending_closes[plan_id] = {
+        "keep_be":  [p.ticket for p in keep_be],
+        "to_close": [p.ticket for p in to_close],
+    }
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ EXECUTE PLAN", callback_data=f"clsig_{plan_id}"),
+        InlineKeyboardButton("❌ SKIP",          callback_data="clskip"),
+    ]])
+
+    await bot.send_message(
+        chat_id=YOUR_CHAT_ID,
+        text="\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=keyboard,
+    )
+    log.info(
+        f"Collect-profit plan sent: {len(to_close)} close, "
+        f"{len(keep_be)} breakeven, {len(losers)} untouched"
+    )
 
 
 async def _send_early_tp_plan(bot, alert, groups):
