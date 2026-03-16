@@ -165,13 +165,17 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
         return f"❌ Lot calculation failed:\n{lot_explanation}"
 
     # ── Split lot into TRADE_SPLIT equal positions ────────────────────────────
-    vol_step  = info.volume_step
-    split_lot = max(MIN_LOT, round(round(lot / TRADE_SPLIT / vol_step) * vol_step, 2))
+    # Cap splits so total risk never exceeds the calculated lot.
+    # e.g. lot=0.01, TRADE_SPLIT=5 → only 1 split (can't split below MIN_LOT)
+    vol_step      = info.volume_step
+    actual_splits = max(1, min(TRADE_SPLIT, int(lot / MIN_LOT)))
+    split_lot     = round(round(lot / actual_splits / vol_step) * vol_step, 2)
+    split_lot     = max(MIN_LOT, split_lot)
 
     tickets = []
     failed  = []
 
-    for i in range(TRADE_SPLIT):
+    for i in range(actual_splits):
         # Assign TPs across splits — cycle through available TPs
         split_tp = signal.tps[i % len(signal.tps)] if signal.tps else tp
         req = {
@@ -222,7 +226,9 @@ def execute_trade(signal: Signal, signal_id: str = None) -> str:
         f"Entry: `{price}` | SL: `{signal.sl}`\n"
         f"TPs: `{tps_str}`\n\n"
         f"{lot_explanation}\n"
-        f"📦 Split: `{TRADE_SPLIT} × {split_lot} lot`\n\n"
+        f"📦 Split: `{actual_splits} × {split_lot} lot`"
+        + (f" _(reduced from {TRADE_SPLIT} — margin too small to split further)_" if actual_splits < TRADE_SPLIT else "")
+        + "\n\n"
         f"🎫 Tickets:\n{tick_lines}{failed_str}"
     )
 
