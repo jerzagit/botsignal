@@ -120,6 +120,34 @@ def _tp_for_layer(idx: int, actual_layers: int, effective_tps: list) -> float:
     return effective_tps[-1]   # deepest → furthest TP (free ride)
 
 
+def _tp_for_sub_order(tp_idx: int, tp_split: int, effective_tps: list) -> float:
+    """
+    Distribute sub-order TPs in thirds:
+      1×TP1 (secure quick),  ceil((N-1)/2)×TP2 (medium),  rest=Runner (no TP).
+
+    | splits | TP1 | TP2 | Runner |
+    |--------|-----|-----|--------|
+    |   1    |  1  |  0  |   0    |
+    |   2    |  1  |  1  |   0    |
+    |   3    |  1  |  1  |   1    |
+    |   4    |  1  |  2  |   1    |
+    """
+    if not effective_tps:
+        return 0.0
+    if tp_split <= 1:
+        return effective_tps[0]
+    if tp_split == 2:
+        return effective_tps[min(tp_idx, len(effective_tps) - 1)]
+    # 3+ splits: 1×TP1, ceil((N-1)/2)×TP2, rest=runner
+    tp2_count = -(-(tp_split - 1) // 2)   # ceil division
+    if tp_idx == 0:
+        return effective_tps[0]                               # TP1
+    elif tp_idx <= tp2_count:
+        return effective_tps[min(1, len(effective_tps) - 1)]  # TP2
+    else:
+        return 0.0                                            # Runner (no TP)
+
+
 def _layer_trigger_price(signal, l1_entry: float, layer_idx: int) -> float:
     """
     Absolute price that should trigger layer N (0-indexed).
@@ -407,7 +435,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                 spread_retry  = False
 
                 for tp_idx in range(session.tp_split):
-                    tp_val  = effective_tps[tp_idx % len(effective_tps)]
+                    tp_val  = _tp_for_sub_order(tp_idx, session.tp_split, effective_tps)
                     all_own = own_tix + layer_tickets   # include already-placed sub-orders
 
                     result = await asyncio.get_event_loop().run_in_executor(
@@ -460,9 +488,22 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                     else:
                         next_msg = "\n🎯 All layers active — monitoring TPs"
 
-                    tp_labels = " / ".join(
-                        f"TP{i+1}:`{effective_tps[i % len(effective_tps)]}`"
-                        for i in range(len(layer_tickets))
+                    # Build TP breakdown label: TP1 × N | TP2 × N | Runner × N
+                    tp_counts = {}
+                    for i in range(len(layer_tickets)):
+                        tv = _tp_for_sub_order(i, session.tp_split, effective_tps)
+                        if tv == 0.0:
+                            tp_counts["Runner"] = tp_counts.get("Runner", 0) + 1
+                        else:
+                            # Find which TP index this matches
+                            tp_num = next(
+                                (j + 1 for j, t in enumerate(effective_tps) if t == tv),
+                                "?"
+                            )
+                            key = f"TP{tp_num}:`{tv}`"
+                            tp_counts[key] = tp_counts.get(key, 0) + 1
+                    tp_labels = " | ".join(
+                        f"{k} x {v}" for k, v in tp_counts.items()
                     )
                     tix_str = ", ".join(f"#{t}" for t in layer_tickets)
                     await _notify(bot, (

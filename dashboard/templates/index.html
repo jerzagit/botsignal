@@ -385,14 +385,14 @@ SL = 60p → no adjustment, use Hafiz's TP as-is</div>
       <div class="g-live na" id="gc-profitlock-live">Monitors open positions</div>
       <div class="g-toggle" onclick="toggleDetail(this)">details</div>
       <div class="g-detail">
-        When any bot position runs +50 pips profit, SL moves to breakeven (risk-free) and TP pushes to +100p from entry. Checked every 60s. Each sub-order is handled independently.
+        When any bot position runs +40 pips profit, SL moves to breakeven (risk-free). TP positions get TP pushed to +100p. Runner positions (no TP) ride indefinitely with BE protection. Checked every 60s.
         <div class="scenario">SELL entry @ 5024, 4 sub-orders:
-Sub 1 (TP1): hits TP at +60p → closes normally
-Sub 2 (TP2): hits TP at +80p → closes normally
-Sub 3 (TP1): at +50p → Profit Lock fires!
-  SL: 5029 → 5024 (breakeven)
-  TP: 5018 → 4914 (+100p from entry)
-Sub 4 (TP2): same treatment independently</div>
+Sub 1 (TP1): hits TP1 at +70p → closes, profit secured
+Sub 2 (TP2): at +40p → BE! then hits TP2 at +90p → closes
+Sub 3 (TP2): at +40p → BE + TP pushed to +100p
+Sub 4 (Runner): at +40p → SL→5024 (BE), NO TP cap
+  → rides indefinitely with zero risk!
+  → price runs 200p? Pure profit. Reverses? $0 loss.</div>
       </div>
     </div>
     <div class="guard-card info" id="gc-dca">
@@ -401,16 +401,19 @@ Sub 4 (TP2): same treatment independently</div>
       <div class="g-live na" id="gc-dca-live">Calculated per signal</div>
       <div class="g-toggle" onclick="toggleDetail(this)">details</div>
       <div class="g-detail">
-        Each DCA layer is dynamically split into sub-orders based on your margin. More margin = more sub-orders (up to MAX_SUB_SPLITS cap). Sub-orders cycle through signal TPs: TP1, TP2, TP1, TP2.
+        Each DCA layer is dynamically split into sub-orders based on your margin. TPs distributed in thirds: secure quick (TP1), medium (TP2), and runners (no TP, ride with BE).
         <div class="scenario">Formula: splits = min(lot_per_layer / MIN_LOT, MAX_SUB_SPLITS)
 
-$200 free → 0.03/layer → 3 splits × 0.01
-$500 free → 0.06/layer → 4 splits × 0.02 (capped)
-$1000 free → 0.11/layer → 4 splits × 0.03 (capped)
-$100 free → 0.01/layer → 1 split × 0.01
+TP distribution (thirds strategy):
+  1 split:  1×TP1
+  2 splits: 1×TP1, 1×TP2
+  3 splits: 1×TP1, 1×TP2, 1×Runner
+  4 splits: 1×TP1, 2×TP2, 1×Runner
 
-TP cycling (4 splits, 2 TPs):
-  Sub1→TP1, Sub2→TP2, Sub3→TP1, Sub4→TP2</div>
+$200  → 3 splits: TP1 + TP2 + Runner
+$500  → 4 splits: TP1 + TP2×2 + Runner
+$1000 → 4 splits: TP1 + TP2×2 + Runner
+Runner = no TP, rides with BE protection at +40p</div>
       </div>
     </div>
   </div>

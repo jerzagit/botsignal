@@ -138,16 +138,21 @@ def check_profit_lock():
 
         # Calculate target SL (breakeven) and TP (+100p from entry)
         new_sl = entry
-        if is_buy:
-            new_tp = round(entry + PROFIT_LOCK_TP_PIPS * SL_PIP_SIZE, 2)
-        else:
-            new_tp = round(entry - PROFIT_LOCK_TP_PIPS * SL_PIP_SIZE, 2)
 
-        # Never reduce TP (if original is already further, keep it)
-        if is_buy and pos.tp > 0 and pos.tp > new_tp:
-            new_tp = pos.tp
-        elif not is_buy and pos.tp > 0 and pos.tp < new_tp:
-            new_tp = pos.tp
+        # Runner position (no TP set) — only move SL to breakeven, let it ride
+        if pos.tp == 0.0:
+            new_tp = 0.0
+        else:
+            if is_buy:
+                new_tp = round(entry + PROFIT_LOCK_TP_PIPS * SL_PIP_SIZE, 2)
+            else:
+                new_tp = round(entry - PROFIT_LOCK_TP_PIPS * SL_PIP_SIZE, 2)
+
+            # Never reduce TP (if original is already further, keep it)
+            if is_buy and pos.tp > new_tp:
+                new_tp = pos.tp
+            elif not is_buy and pos.tp < new_tp:
+                new_tp = pos.tp
 
         # Skip if already fully locked (SL at BE and TP at target)
         sl_at_be = (is_buy and pos.sl >= entry) or (not is_buy and pos.sl > 0 and pos.sl <= entry)
