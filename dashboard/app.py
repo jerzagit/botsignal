@@ -24,6 +24,7 @@ from core.config import (
     SL_MIN_PIPS, TP_ENFORCE_PIPS, RISK_PERCENT, MIN_LOT, MAX_LOT,
     MT5_SYMBOL_SUFFIX, SL_PIP_SIZE, ENV_MODE, MAP_ENABLED,
     PROFIT_LOCK_ENABLED, PROFIT_LOCK_PIPS, PROFIT_LOCK_TP_PIPS,
+    LAYER_MODE, LAYER_COUNT, LAYER2_PIPS, MAX_SUB_SPLITS,
 )
 from dashboard.poller import start_poller
 
@@ -191,6 +192,14 @@ def api_guards_config():
             "threshold": f"+{PROFIT_LOCK_PIPS}p → BE + TP {PROFIT_LOCK_TP_PIPS}p",
             "enabled": PROFIT_LOCK_ENABLED,
         },
+        "dca": {
+            "enabled":        LAYER_MODE,
+            "max_layers":     LAYER_COUNT,
+            "layer_gap_pips": LAYER2_PIPS,
+            "max_sub_splits": MAX_SUB_SPLITS,
+            "min_lot":        MIN_LOT,
+            "threshold":      f"{'ON' if LAYER_MODE else 'OFF'} · {LAYER_COUNT} layers · {LAYER2_PIPS}p gap · {MAX_SUB_SPLITS} splits",
+        },
     })
 
 
@@ -218,6 +227,27 @@ def api_guards_live():
         spread_pips = round((tick.ask - tick.bid) / SL_PIP_SIZE, 2) if tick else None
         margin_level = round(acc.margin_level, 1) if acc and acc.margin > 0 else None
 
+        # Estimate DCA breakdown from current free margin (assuming ~50p SL, XAUUSD)
+        dca_estimate = None
+        if acc and LAYER_MODE:
+            free = acc.margin_free
+            # Rough lot estimate: (free × risk%) / (50 SL × $10 pip_value)
+            est_total_lot = round(free * RISK_PERCENT / (50 * 10), 2)
+            if est_total_lot >= MIN_LOT:
+                est_layers = min(LAYER_COUNT, max(1, int(est_total_lot / MIN_LOT)))
+                est_lot_per_layer = round(est_total_lot / est_layers, 2)
+                est_affordable = max(1, int(est_lot_per_layer / MIN_LOT))
+                est_splits = min(est_affordable, MAX_SUB_SPLITS)
+                est_sub_lot = max(MIN_LOT, round(est_lot_per_layer / est_splits, 2))
+                dca_estimate = {
+                    "total_lot":     est_total_lot,
+                    "layers":        est_layers,
+                    "lot_per_layer": est_lot_per_layer,
+                    "splits":        est_splits,
+                    "sub_lot":       est_sub_lot,
+                    "total_orders":  est_layers * est_splits,
+                }
+
         return jsonify({
             "margin_level":    margin_level,
             "margin_level_ok": margin_level is None or margin_level >= MIN_MARGIN_LEVEL,
@@ -226,6 +256,7 @@ def api_guards_live():
             "balance":         round(acc.balance, 2) if acc else None,
             "equity":          round(acc.equity, 2)  if acc else None,
             "free_margin":     round(acc.margin_free, 2) if acc else None,
+            "dca_estimate":    dca_estimate,
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

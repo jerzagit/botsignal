@@ -257,6 +257,10 @@
     <div class="item"><span class="lbl">Free Margin</span><span class="val" id="acc-free">—</span></div>
     <div class="item"><span class="lbl">Margin Level</span><span class="val" id="acc-margin-level">—</span></div>
     <div class="item"><span class="lbl">XAUUSD Spread</span><span class="val" id="acc-spread">—</span></div>
+    <div class="item" id="dca-estimate-item" style="display:none;border-left:2px solid #e5e7eb;padding-left:16px;">
+      <span class="lbl">Est. DCA Split</span>
+      <span class="val" id="acc-dca-estimate" style="font-size:0.85rem;">—</span>
+    </div>
   </div>
 
   <!-- Guard cards (6 guards + 2 info cards) -->
@@ -337,12 +341,14 @@ DCA L2+: Always skipped (enters 35p deeper by design)</div>
       <div class="g-status" id="gc-lot_calc-status"></div>
       <div class="g-toggle" onclick="toggleDetail(this)">details</div>
       <div class="g-detail">
-        Blocks if calculated lot is 0 — account too small for even MIN_LOT. Lot = (free_margin × risk%) / (SL_pips × pip_value). In DCA mode, further split by layers and TPs.
-        <div class="scenario">PASS: $1000 margin, 10% risk, 45p SL → 0.23 lot
-  DCA: 0.23 / 2 layers = 0.12/layer
-  TP split: 0.12 / 2 TPs = 0.06 per sub-order ✓
-BLOCK: $50 margin, 10% risk, 100p SL → 0.005 lot
-  Below MIN_LOT 0.01 → blocked</div>
+        Blocks if calculated lot is 0 — account too small for even MIN_LOT. Lot = (free_margin × risk%) / (SL_pips × pip_value). In DCA mode, split by layers then dynamically sub-split per layer.
+        <div class="scenario">PASS: $1000 margin, 10% risk, 45p SL → 0.22 lot
+  DCA: 0.22 / 7 layers = 0.03/layer
+  Sub-split: min(3, MAX_SUB_SPLITS) = 3
+  → 3 sub-orders × 0.01 per layer ✓
+PASS: $500, 0.12 lot / 7 layers = 0.02
+  → 2 sub-orders × 0.01 per layer ✓
+BLOCK: $50 margin → 0.005 lot < MIN_LOT → blocked</div>
       </div>
     </div>
     <div class="guard-card info">
@@ -353,10 +359,11 @@ BLOCK: $50 margin, 10% risk, 100p SL → 0.005 lot
       <div class="g-detail">
         Maximum percentage of free margin risked per signal. All layers combined worst-case loss stays within this budget. Lot is calculated once at signal arrival using entry_mid.
         <div class="scenario">$1000 free margin × 10% = $100 max risk
-Total lot sized to lose ~$100 if all layers hit SL
+Total lot → split across 7 layers → 4 sub-orders each
+All 28 sub-orders combined SL loss ≈ $100
 L1 risks more (enters far from SL)
-L2 risks less (enters close to SL)
-Combined ≈ budget</div>
+L2+ risks less (enters closer to SL)
+Combined ≈ budget (within ~2% overage)</div>
       </div>
     </div>
     <div class="guard-card info">
@@ -378,14 +385,32 @@ SL = 60p → no adjustment, use Hafiz's TP as-is</div>
       <div class="g-live na" id="gc-profitlock-live">Monitors open positions</div>
       <div class="g-toggle" onclick="toggleDetail(this)">details</div>
       <div class="g-detail">
-        When any bot position runs +50 pips profit, SL moves to breakeven (risk-free) and TP pushes to +100p from entry. Checked every 60s. Each TP-split sub-order is handled independently.
-        <div class="scenario">SELL entry @ 5024, TP1=5018 (60p), TP2=5016 (80p)
-Sub-order 1 (TP1): hits 5018 at +60p → closes normally
-Sub-order 2 (TP2): at +50p → Profit Lock fires!
-  SL: 5029 → 5024 (breakeven, risk-free)
-  TP: 5016 → 4914 (+100p from entry)
-  → Price reverses? Closes at $0 loss
-  → Price runs? Hits +100p profit!</div>
+        When any bot position runs +50 pips profit, SL moves to breakeven (risk-free) and TP pushes to +100p from entry. Checked every 60s. Each sub-order is handled independently.
+        <div class="scenario">SELL entry @ 5024, 4 sub-orders:
+Sub 1 (TP1): hits TP at +60p → closes normally
+Sub 2 (TP2): hits TP at +80p → closes normally
+Sub 3 (TP1): at +50p → Profit Lock fires!
+  SL: 5029 → 5024 (breakeven)
+  TP: 5018 → 4914 (+100p from entry)
+Sub 4 (TP2): same treatment independently</div>
+      </div>
+    </div>
+    <div class="guard-card info" id="gc-dca">
+      <div class="g-title">DCA Sub-Splitting</div>
+      <div class="g-threshold" id="gc-dca-thresh">—</div>
+      <div class="g-live na" id="gc-dca-live">Calculated per signal</div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Each DCA layer is dynamically split into sub-orders based on your margin. More margin = more sub-orders (up to MAX_SUB_SPLITS cap). Sub-orders cycle through signal TPs: TP1, TP2, TP1, TP2.
+        <div class="scenario">Formula: splits = min(lot_per_layer / MIN_LOT, MAX_SUB_SPLITS)
+
+$200 free → 0.03/layer → 3 splits × 0.01
+$500 free → 0.06/layer → 4 splits × 0.02 (capped)
+$1000 free → 0.11/layer → 4 splits × 0.03 (capped)
+$100 free → 0.01/layer → 1 split × 0.01
+
+TP cycling (4 splits, 2 TPs):
+  Sub1→TP1, Sub2→TP2, Sub3→TP1, Sub4→TP2</div>
       </div>
     </div>
   </div>
@@ -663,6 +688,15 @@ Sub-order 2 (TP2): at +50p → Profit Lock fires!
           }
         }
 
+        // DCA config card
+        set('gc-dca-thresh', d.dca?.threshold || '—');
+        if (d.dca && !d.dca.enabled) {
+          const dcaCard = document.getElementById('gc-dca');
+          if (dcaCard) {
+            document.getElementById('gc-dca-live').textContent = 'DCA Disabled (single entry mode)';
+          }
+        }
+
         // Environment badge
         const envBadge = document.getElementById('env-badge');
         if (d.env_mode === 'live') {
@@ -742,6 +776,23 @@ Sub-order 2 (TP2): at +50p → Profit Lock fires!
           spStat.textContent = d.spread_ok ? '✓ PASS' : '✗ BLOCK';
           spStat.className   = 'g-status ' + (d.spread_ok ? 'ok' : 'bad');
           spCard.classList.add(d.spread_ok ? 'pass' : 'block');
+        }
+
+        // DCA estimate from live margin
+        const dcaItem = document.getElementById('dca-estimate-item');
+        const dcaEl   = document.getElementById('acc-dca-estimate');
+        const dcaLive = document.getElementById('gc-dca-live');
+        if (d.dca_estimate) {
+          const e = d.dca_estimate;
+          const txt = `${e.layers}L × ${e.splits}s × ${e.sub_lot} = ${e.total_orders} orders`;
+          dcaEl.textContent = txt;
+          dcaItem.style.display = '';
+          if (dcaLive) {
+            dcaLive.textContent = `${e.total_lot} lot → ${e.layers} layers × ${e.splits} splits × ${e.sub_lot}`;
+            dcaLive.className = 'g-live ok';
+          }
+        } else {
+          dcaItem.style.display = 'none';
         }
       })
       .catch(() => {

@@ -12,10 +12,11 @@ Layer count is DYNAMIC:
   actual_layers = min(LAYER_COUNT, int(total_lot / MIN_LOT))
   → $200 account → 3 layers, $500 → 5, $1000+ → 7  (with LAYER_COUNT=7)
 
-TP splitting:
-  Each layer's lot is split across signal TPs:
-  e.g. L1 lot=0.12 with 2 TPs → 0.06 at TP1 + 0.06 at TP2
-  If sub_lot < MIN_LOT, reduce split count (fewer TPs used).
+TP splitting (dynamic sub-splitting):
+  Each layer is split into up to MAX_SUB_SPLITS sub-orders (default 4).
+  tp_split = min(int(lot_per_layer / MIN_LOT), MAX_SUB_SPLITS)
+  Sub-orders cycle through signal TPs: TP1, TP2, TP1, TP2
+  Auto-scales: $200→2-3 splits, $500→4, $1000+→4 (capped)
 
 Exit:
   When all upper layers' sub-orders close at TP → move deepest to breakeven.
