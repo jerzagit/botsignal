@@ -100,6 +100,11 @@
     .guard-card .g-status { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.5px; }
     .guard-card .g-status.ok  { color: #16a34a; }
     .guard-card .g-status.bad { color: #dc2626; }
+    .guard-card .g-detail { display: none; font-size: 0.72rem; color: #6b7280; line-height: 1.5; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #e5e7eb; }
+    .guard-card .g-detail.show { display: block; }
+    .guard-card .g-toggle { font-size: 0.68rem; color: #2563eb; cursor: pointer; margin-top: 4px; user-select: none; }
+    .guard-card .g-toggle:hover { text-decoration: underline; }
+    .guard-card .g-detail .scenario { background: #f9fafb; border-radius: 6px; padding: 6px 8px; margin-top: 4px; font-family: monospace; font-size: 0.68rem; line-height: 1.4; white-space: pre-wrap; }
 
     .account-bar {
       background: white; border-radius: 10px; padding: 14px 20px;
@@ -261,51 +266,127 @@
       <div class="g-threshold" id="gc-margin-thresh">—</div>
       <div class="g-live na" id="gc-margin-live">Loading…</div>
       <div class="g-status" id="gc-margin-status"></div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Blocks new trades when your account is overleveraged. Margin level = equity / used margin × 100. Skipped when no open trades (first trade always allowed).
+        <div class="scenario">PASS: Equity $950, Used $200 → 475% > 300%
+BLOCK: Equity $500, Used $400 → 125% < 300%
+Fix: Close losing positions to free margin</div>
+      </div>
     </div>
     <div class="guard-card" id="gc-stack">
       <div class="g-title">Guard 2 · Direction Stack</div>
       <div class="g-threshold" id="gc-stack-thresh">—</div>
       <div class="g-live na" id="gc-stack-live">—</div>
       <div class="g-status" id="gc-stack-status"></div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Prevents doubling exposure on the same direction. If you already have a SELL open at risk, another SELL is blocked. Breakeven positions (SL = entry) and own DCA sub-orders are exempt.
+        <div class="scenario">PASS: New BUY, existing SELL open → OK (different direction)
+PASS: New SELL, existing SELL at breakeven → OK (risk-free)
+PASS: L2 SELL, L1 SELL open → OK (own DCA tickets exempt)
+BLOCK: New SELL, existing SELL at risk → blocked</div>
+      </div>
     </div>
     <div class="guard-card" id="gc-rr_ratio">
       <div class="g-title">Guard 3 · RR Ratio</div>
       <div class="g-threshold" id="gc-rr_ratio-thresh">—</div>
       <div class="g-live na" id="gc-rr_ratio-live">Signal dependent</div>
       <div class="g-status" id="gc-rr_ratio-status"></div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Checks reward vs risk. If SL is tight (< 50p), TP auto-adjusts to 70p first. Then blocks if TP/SL ratio is still below minimum. Calculated from entry_mid.
+        <div class="scenario">PASS: SL=30p, TP auto→70p, ratio=2.3:1 > 1.4 ✓
+PASS: SL=50p, TP=80p, ratio=1.6:1 > 1.4 ✓
+BLOCK: SL=60p, TP=50p, ratio=0.83:1 < 1.4 ✗
+Note: Poor RR = risking more than potential reward</div>
+      </div>
     </div>
     <div class="guard-card" id="gc-spread">
       <div class="g-title">Guard 4 · Spread</div>
       <div class="g-threshold" id="gc-spread-thresh">—</div>
       <div class="g-live na" id="gc-spread-live">Loading…</div>
       <div class="g-status" id="gc-spread-status"></div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Blocks when broker spread is abnormally wide (news events, off-hours). Wide spread eats into your SL distance. Always retries — never fatal. Bot waits for spread to normalise.
+        <div class="scenario">PASS: Spread 1.8 pips → normal market ✓
+BLOCK: Spread 4.2 pips → news event, retry in 30s
+BLOCK: Spread 8.0 pips → off-hours, retry until market opens
+XAUUSD normal: 1-2 pips | News: 5-15 pips</div>
+      </div>
     </div>
     <div class="guard-card" id="gc-proximity">
       <div class="g-title">Guard 5 · Entry Proximity</div>
       <div class="g-threshold" id="gc-proximity-thresh">—</div>
       <div class="g-live na" id="gc-proximity-live">Signal dependent</div>
       <div class="g-status" id="gc-proximity-status"></div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Blocks if current price is too far from Hafiz's entry zone. Prevents entering at a bad price. Skipped for L2+ in DCA mode (deeper entries are intentionally outside zone).
+        <div class="scenario">PASS: Zone 5020-5025, price 5022 → inside zone ✓
+PASS: Zone 5020-5025, price 5028 → 30p away ✓
+BLOCK: Zone 5020-5025, price 5080 → 550p away ✗
+DCA L2+: Always skipped (enters 35p deeper by design)</div>
+      </div>
     </div>
     <div class="guard-card" id="gc-lot_calc">
       <div class="g-title">Guard 6 · Lot Calculation</div>
       <div class="g-threshold" id="gc-lot_calc-thresh">—</div>
       <div class="g-live na" id="gc-lot_calc-live">Calculated per signal</div>
       <div class="g-status" id="gc-lot_calc-status"></div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Blocks if calculated lot is 0 — account too small for even MIN_LOT. Lot = (free_margin × risk%) / (SL_pips × pip_value). In DCA mode, further split by layers and TPs.
+        <div class="scenario">PASS: $1000 margin, 10% risk, 45p SL → 0.23 lot
+  DCA: 0.23 / 2 layers = 0.12/layer
+  TP split: 0.12 / 2 TPs = 0.06 per sub-order ✓
+BLOCK: $50 margin, 10% risk, 100p SL → 0.005 lot
+  Below MIN_LOT 0.01 → blocked</div>
+      </div>
     </div>
     <div class="guard-card info">
       <div class="g-title">Risk per Trade</div>
       <div class="g-threshold" id="gc-risk-thresh">—</div>
       <div class="g-live na">Applied to free margin</div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Maximum percentage of free margin risked per signal. All layers combined worst-case loss stays within this budget. Lot is calculated once at signal arrival using entry_mid.
+        <div class="scenario">$1000 free margin × 10% = $100 max risk
+Total lot sized to lose ~$100 if all layers hit SL
+L1 risks more (enters far from SL)
+L2 risks less (enters close to SL)
+Combined ≈ budget</div>
+      </div>
     </div>
     <div class="guard-card info">
       <div class="g-title">Auto TP Enforcement</div>
       <div class="g-threshold" id="gc-autotp-thresh">—</div>
       <div class="g-live na">Applied per signal</div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        When Hafiz's SL is tight (< 50 pips), the TP is automatically pushed further to maintain a good reward-to-risk ratio. Prevents entering trades with tiny TP targets.
+        <div class="scenario">SL = 30p (tight), Hafiz TP = 40p
+→ Auto-adjusted TP to 70p from mid
+→ New RR = 70/30 = 2.3:1 ✓
+SL = 60p → no adjustment, use Hafiz's TP as-is</div>
+      </div>
     </div>
     <div class="guard-card info" id="gc-profitlock">
       <div class="g-title">Profit Lock</div>
       <div class="g-threshold" id="gc-profitlock-thresh">—</div>
       <div class="g-live na" id="gc-profitlock-live">Monitors open positions</div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        When any bot position runs +50 pips profit, SL moves to breakeven (risk-free) and TP pushes to +100p from entry. Checked every 60s. Each TP-split sub-order is handled independently.
+        <div class="scenario">SELL entry @ 5024, TP1=5018 (60p), TP2=5016 (80p)
+Sub-order 1 (TP1): hits 5018 at +60p → closes normally
+Sub-order 2 (TP2): at +50p → Profit Lock fires!
+  SL: 5029 → 5024 (breakeven, risk-free)
+  TP: 5016 → 4914 (+100p from entry)
+  → Price reverses? Closes at $0 loss
+  → Price runs? Hits +100p profit!</div>
+      </div>
     </div>
   </div>
 
@@ -531,6 +612,13 @@
 
         tbody.innerHTML = html;
       });
+  }
+
+  // ── Toggle guard detail panels ──────────────────────────────────
+  function toggleDetail(el) {
+    const detail = el.nextElementSibling;
+    const isOpen = detail.classList.toggle('show');
+    el.textContent = isOpen ? 'hide details' : 'details';
   }
 
   // ── Guard label map ──────────────────────────────────────────────
