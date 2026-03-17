@@ -468,7 +468,7 @@
               <td>${statusBadge(s.status)}</td>
             </tr>`;
 
-          if (s.status === 'executed' && s.ticket) {
+          if (s.ticket) {
             const prof = s.profit !== null
               ? `<strong style="color:${s.profit >= 0 ? '#16a34a' : '#dc2626'}">${s.profit >= 0 ? '+' : ''}$${fmt(s.profit, 2)}</strong>`
               : '—';
