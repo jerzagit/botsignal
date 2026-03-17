@@ -14,10 +14,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from core.listener  import start_listener
-from core.notifier  import start_notifier, get_bot
-from core.mt5       import mt5_connect_test
-from core.config    import YOUR_CHAT_ID, ENV_MODE
+from core.listener     import start_listener
+from core.notifier     import start_notifier, get_bot
+from core.map_watcher  import start_map_watcher
+from core.mt5          import mt5_connect_test
+from core.config       import YOUR_CHAT_ID, ENV_MODE, MAP_ENABLED
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,10 +76,22 @@ async def main():
     ok, msg = mt5_connect_test()
     log.info(f"MT5 check: {msg}")
 
-    await asyncio.gather(
+    tasks = [
         start_notifier(),   # Telegram bot — handles button taps
         start_listener(),   # Telethon — watches mentor's group as your account
-    )
+    ]
+
+    if MAP_ENABLED:
+        async def _delayed_map_watcher():
+            """Wait briefly for notifier to initialize, then start map watcher."""
+            await asyncio.sleep(3)
+            bot = get_bot()
+            await start_map_watcher(bot)
+
+        tasks.append(_delayed_map_watcher())
+        log.info("AutoZone enabled — watcher will start after notifier init")
+
+    await asyncio.gather(*tasks)
 
 
 async def on_shutdown():

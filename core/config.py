@@ -99,6 +99,14 @@ DB_NAME     = os.getenv("DB_NAME",     "botsignal")
 DB_USER     = os.getenv("DB_USER",     "root")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
+# ── Profit Lock (auto-breakeven + TP override when in profit) ────────────────
+PROFIT_LOCK_ENABLED = os.getenv("PROFIT_LOCK_ENABLED", "true").lower() == "true"
+PROFIT_LOCK_PIPS    = int(os.getenv("PROFIT_LOCK_PIPS", "50"))      # trigger at +N pips profit
+PROFIT_LOCK_TP_PIPS = int(os.getenv("PROFIT_LOCK_TP_PIPS", "100"))  # new TP = entry ± N pips
+
+# ── AutoZone (auto-entry from SNR/SND mapped zones) ─────────────────────────
+MAP_ENABLED = os.getenv("MAP_ENABLED", "true").lower() == "true"
+
 # ── Layered DCA entry ─────────────────────────────────────────────────────────
 # When enabled, spreads the full position across N layers as price dips deeper.
 # Layer count is DYNAMIC: min(LAYER_COUNT, int(total_lot / MIN_LOT))

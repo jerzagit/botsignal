@@ -86,6 +86,14 @@ RISK_PERCENT=0.10              # 10% of free margin per trade
 MIN_LOT=0.01                   # never go below this
 MAX_LOT=0.50                   # never go above this
 
+# ── Profit Lock (auto-breakeven + TP override) ───────
+PROFIT_LOCK_ENABLED=true       # enable/disable
+PROFIT_LOCK_PIPS=50            # trigger at +50 pips profit
+PROFIT_LOCK_TP_PIPS=100        # push TP to +100 pips from entry
+
+# ── AutoZone (auto-entry from mapped zones) ──────────
+MAP_ENABLED=true               # enable/disable AutoZone
+
 # ── Layered DCA Entry ─────────────────────────────────
 # LAYER_MODE=true  → build position across N layers as price dips
 # LAYER_MODE=false → original TRADE_SPLIT behaviour (default)
@@ -176,17 +184,28 @@ L2 → price dips 35p from L1     (35 more pips = L3 trigger)
 L3 → price dips 70p from L1     (etc.)
 LN → price dips (N-1)×35p from L1
 
-When upper layers (L1…LN-1) TP → LN moves to breakeven (free ride)
+Each layer split by TPs: sub_lot × num_TPs sub-orders
+When all upper sub-orders TP → all deepest sub-orders move to breakeven (free ride)
 ```
 
-**TP assignment in layered mode:**
+**TP splitting in layered mode:**
 
-| Layer | TP assigned |
-|-------|-------------|
-| L1 | TP1 (first/closest — take profit quickly) |
-| L2 | TP2 (or TP1 if only one TP in signal) |
-| L3+ | cycle through signal TPs |
-| LN (deepest) | Furthest TP — free ride |
+Each layer's lot is split across signal TPs — one sub-order per TP:
+
+```
+Signal with 2 TPs, L1 lot = 0.12:
+  Sub-order 1: 0.06 lot → TP1 (secure profit early)
+  Sub-order 2: 0.06 lot → TP2 (ride for more)
+
+Same split applies to L2, L3, etc.
+```
+
+If `sub_lot < MIN_LOT`, the split count is automatically reduced.
+
+**Profit Lock + TP split interaction:**
+- Sub-orders with short TPs (< 50p from entry) close at TP naturally — Profit Lock never fires
+- Sub-orders with long TPs (≥ 50p) get Profit Lock protection: SL→breakeven, TP→+100p
+- L2 enters deeper → TPs are further from L2 entry → Profit Lock more likely to fire on L2
 
 ---
 
@@ -252,6 +271,7 @@ total_lot    = clamp(total_lot, MIN_LOT, MAX_LOT)
 
 Standard:  split_lot  = total_lot / actual_splits
 Layered:   layer_lot  = total_lot / actual_layers  (dynamic count)
+           sub_lot    = layer_lot / num_TPs        (TP splitting)
 ```
 
 **Lot is calculated ONCE at signal arrival using `entry_mid`.** Layers are placed at different prices, so actual dollar risk per layer varies — but combined worst-case ≈ `RISK_PERCENT × free_margin`.
@@ -312,6 +332,55 @@ You'll see this note in Telegram when TP is overridden:
 
 ---
 
+## Profit Lock — Auto-Breakeven + TP Override
+
+When a position is running +50 pips profit, the poller automatically:
+- Moves SL to breakeven (entry price) — risk-free
+- Pushes TP to +100 pips from entry — bigger target
+
+Checked every 60s by the dashboard poller. Only bot-placed positions (magic 20250101). Never reduces TP. With TP splitting, each sub-order is checked independently — short TPs close before Profit Lock triggers, long TPs get enhanced by it.
+
+```env
+PROFIT_LOCK_ENABLED=true
+PROFIT_LOCK_PIPS=50
+PROFIT_LOCK_TP_PIPS=100
+```
+
+---
+
+## AutoZone — Auto-Entry from Mapped Zones
+
+Map SNR levels and buy/sell zones each morning via Telegram. The bot auto-enters when price reaches a zone.
+
+### Commands (send to @Hafiz_Carat_Signal_Bot)
+
+```
+/snr XAUUSD 5007 5014 5022 5035 5043    — set today's SNR levels
+/map XAUUSD buy 5011-5014               — add a buy zone (SL/TP auto-picked)
+/map XAUUSD sell 5043-5046              — add a sell zone
+/zones                                   — list today's zones + SNR
+/delzone 3                               — delete zone #3
+/clearmap                                — clear all zones + SNR
+```
+
+### SL/TP auto-pick
+
+- **BUY** zone: SL = nearest SNR below zone, TP = nearest SNR above zone
+- **SELL** zone: SL = nearest SNR above zone, TP = nearest SNR below zone
+- If no SNR level found → `/map` rejected with error
+
+### Behaviour
+
+- Checks price every 30s (same `WATCH_INTERVAL_SECS`)
+- All 6 guards apply (margin, stack, RR, spread, proximity, lot)
+- Follows `LAYER_MODE` — DCA or direct, same as signals
+- One-shot: zone fires once, then marked as fired
+- Zones expire at midnight Malaysia time
+- Fully automatic — no EXECUTE/SKIP button needed
+- Dashboard shows AutoZone panel with SNR levels and zone status
+
+---
+
 ## Dashboard
 
 URL: **http://localhost:5000** | Remote: `ngrok http 5000`
@@ -323,6 +392,7 @@ URL: **http://localhost:5000** | Remote: `ngrok http 5000`
 | `EXPIRED` | 30 min passed, price never reached zone |
 | `PENDING` | Watcher active |
 | `MANUAL` | Trade opened directly in MT5 |
+| `MAP` | Trade triggered by AutoZone |
 | `WIN` / `LOSS` / `OPEN` | Trade outcome |
 
 ---
@@ -335,7 +405,7 @@ URL: **http://localhost:5000** | Remote: `ngrok http 5000`
 | Port | `3307` |
 | User | `root` |
 | Database | `botsignal` |
-| Tables | `signals`, `trades`, `guard_events` |
+| Tables | `signals`, `trades`, `guard_events`, `snr_levels`, `mapping_zones` |
 
 ```bash
 docker start mysql-docker    # start
@@ -381,3 +451,5 @@ docker logs mysql-docker     # view logs
 - Positions stay alive when bot stops — SL/TP managed by broker
 - Night agent active 10 PM – 6 AM MYT — covers London + NY session
 - In layered mode, `layer_sessions` dict in `core/layer_watcher.py` tracks all active sessions
+- AutoZone watcher starts 3s after notifier init — requires `MAP_ENABLED=true`
+- AutoZone uses `entry_mode='mapped'` in trades table to distinguish from signal entries

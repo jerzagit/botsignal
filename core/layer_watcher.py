@@ -12,12 +12,13 @@ Layer count is DYNAMIC:
   actual_layers = min(LAYER_COUNT, int(total_lot / MIN_LOT))
   → $200 account → 3 layers, $500 → 5, $1000+ → 7  (with LAYER_COUNT=7)
 
-TP assignment:
-  Upper layers (L1 … LN-1) → cycle through signal TPs in order
-  Deepest layer (LN)       → furthest TP (free ride position)
+TP splitting:
+  Each layer's lot is split across signal TPs:
+  e.g. L1 lot=0.12 with 2 TPs → 0.06 at TP1 + 0.06 at TP2
+  If sub_lot < MIN_LOT, reduce split count (fewer TPs used).
 
 Exit:
-  When all upper layers close at TP → move deepest to breakeven.
+  When all upper layers' sub-orders close at TP → move deepest to breakeven.
   When deepest also closes → session complete.
   When all stopped → session ended.
 """
@@ -53,7 +54,9 @@ class LayerSession:
     actual_layers: int
     lot_per_layer: float
     effective_tps: list
-    tickets: list = field(default_factory=list)   # int|None per layer
+    sub_lot:       float          # lot per sub-order (lot_per_layer / tp_split)
+    tp_split:      int            # how many sub-orders per layer (= min(num_tps, affordable))
+    tickets: list = field(default_factory=list)   # list[list[int]] — sub-tickets per layer
     entries: list = field(default_factory=list)   # float|None per layer
     state:   str  = "WAIT_L1"
 
@@ -162,10 +165,12 @@ async def _notify(bot, text: str):
 
 # ── Main watcher coroutine ────────────────────────────────────────────────────
 
-async def watch_layered_entry(signal, signal_id: str, bot):
+async def watch_layered_entry(signal, signal_id: str, bot,
+                              entry_mode: str = "layered_dca"):
     """
     DCA-style layered entry — runs as an asyncio background task.
     Places N layers as price dips deeper, then monitors for TP → BE.
+    entry_mode: 'layered_dca' (signal-based) or 'mapped' (zone auto-entry).
     """
     symbol   = signal.symbol + MT5_SYMBOL_SUFFIX
     deadline = signal.created_at + SIGNAL_EXPIRY
@@ -215,13 +220,23 @@ async def watch_layered_entry(signal, signal_id: str, bot):
 
     lot_per_layer = max(MIN_LOT, round(total_lot / actual_layers, 2))
 
+    # ── TP splitting: split each layer's lot across signal TPs ─────────────
+    num_tps  = len(effective_tps) if effective_tps else 1
+    tp_split = num_tps
+    # Reduce split count if sub_lot would fall below MIN_LOT
+    while tp_split > 1 and round(lot_per_layer / tp_split, 2) < MIN_LOT:
+        tp_split -= 1
+    sub_lot = max(MIN_LOT, round(lot_per_layer / tp_split, 2))
+
     session = LayerSession(
         signal=signal,
         signal_id=signal_id,
         actual_layers=actual_layers,
         lot_per_layer=lot_per_layer,
         effective_tps=effective_tps,
-        tickets=[None] * actual_layers,
+        sub_lot=sub_lot,
+        tp_split=tp_split,
+        tickets=[[] for _ in range(actual_layers)],
         entries=[None] * actual_layers,
     )
     layer_sessions[signal_id] = session
@@ -229,6 +244,7 @@ async def watch_layered_entry(signal, signal_id: str, bot):
     log.info(
         f"LayerWatcher [{signal_id}]: "
         f"actual_layers={actual_layers} lot_per_layer={lot_per_layer} "
+        f"sub_lot={sub_lot} tp_split={tp_split} "
         f"total_lot={total_lot} layer2_pips={LAYER2_PIPS}"
     )
 
@@ -246,7 +262,7 @@ async def watch_layered_entry(signal, signal_id: str, bot):
             None, _get_price, symbol, signal.direction
         )
 
-        placed_tickets = [t for t in session.tickets if t is not None]
+        placed_tickets = [t for sub in session.tickets for t in sub]
 
         # ── Check for stop-outs on placed layers ──────────────────────────────
         if placed_tickets:
@@ -270,26 +286,27 @@ async def watch_layered_entry(signal, signal_id: str, bot):
             if next_idx >= actual_layers:
                 session.state = "MONITORING"
 
-                # Find actual deepest layer (highest index with a ticket)
+                # Find actual deepest layer (highest index with sub-tickets)
                 deepest_idx = max(
-                    (i for i in range(actual_layers) if session.tickets[i] is not None),
+                    (i for i in range(actual_layers) if session.tickets[i]),
                     default=None
                 )
                 if deepest_idx is None:
                     await asyncio.sleep(WATCH_INTERVAL_SECS)
                     continue
 
-                deepest_ticket = session.tickets[deepest_idx]
-                upper_tickets  = [
-                    session.tickets[i]
-                    for i in range(deepest_idx)
-                    if session.tickets[i] is not None
+                deepest_tickets = session.tickets[deepest_idx]
+                upper_tickets   = [
+                    t for i in range(deepest_idx)
+                    for t in session.tickets[i]
                 ]
 
                 still_open_set = set(still_open)
 
-                if deepest_ticket not in still_open_set:
-                    # Deepest layer also closed — all done
+                # Check if ALL deepest sub-tickets are closed
+                deepest_open = [t for t in deepest_tickets if t in still_open_set]
+                if not deepest_open:
+                    # Deepest layer fully closed — all done
                     pending.pop(signal_id, None)
                     upsert_signal(signal_id, signal, status="closed")
                     session.state = "DONE"
@@ -302,17 +319,21 @@ async def watch_layered_entry(signal, signal_id: str, bot):
                 if upper_tickets:
                     upper_still_open = [t for t in upper_tickets if t in still_open_set]
                     if not upper_still_open:
-                        # All upper layers closed at TP → move deepest to BE
-                        be_result = await asyncio.get_event_loop().run_in_executor(
-                            None, set_breakeven, deepest_ticket
-                        )
+                        # All upper layers closed at TP → move ALL deepest sub-tickets to BE
+                        be_results = []
+                        for dt in deepest_open:
+                            be_result = await asyncio.get_event_loop().run_in_executor(
+                                None, set_breakeven, dt
+                            )
+                            be_results.append(f"#{dt}: {be_result}")
                         pending.pop(signal_id, None)
                         session.state = "DONE"
+                        be_text = "\n".join(be_results)
                         await _notify(bot, (
                             f"🔒 *L1–L{deepest_idx} TP secured → L{deepest_idx+1} free ride!*\n"
                             f"`{signal.symbol} {signal.direction.upper()}`\n"
-                            f"#{deepest_ticket} moved to breakeven ♻️\n"
-                            f"_{be_result}_"
+                            f"{len(deepest_open)} position(s) moved to breakeven ♻️\n"
+                            f"_{be_text}_"
                         ))
                         return
 
@@ -378,25 +399,52 @@ async def watch_layered_entry(signal, signal_id: str, bot):
 
             if should_place:
                 layer_num  = next_idx + 1
-                own_tix    = [t for t in session.tickets[:next_idx] if t is not None]
-                tp_val     = _tp_for_layer(next_idx, actual_layers, effective_tps)
+                # Flatten all previous layers' sub-tickets for own_tickets
+                own_tix    = [t for sub in session.tickets[:next_idx] for t in sub]
 
-                result = await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    execute_trade,
-                    signal,
-                    signal_id,
-                    lot_per_layer,      # lot_override
-                    own_tix,            # own_tickets (exempt from stack guard)
-                    tp_val,             # tp_override → single-order mode
-                    next_idx > 0,       # skip_proximity for L2+
-                    'layered_dca',      # entry_mode
-                    layer_num,          # layer_num
-                )
+                # ── TP-split: place sub_lot × tp_split orders (one per TP) ─────
+                layer_tickets = []
+                layer_blocked = None   # first non-spread block message
+                spread_retry  = False
 
-                if "Trade Executed" in result:
-                    ticket = _get_latest_ticket(signal_id, exclude=own_tix)
-                    session.tickets[next_idx] = ticket
+                for tp_idx in range(session.tp_split):
+                    tp_val  = effective_tps[tp_idx % len(effective_tps)]
+                    all_own = own_tix + layer_tickets   # include already-placed sub-orders
+
+                    result = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        execute_trade,
+                        signal,
+                        signal_id,
+                        session.sub_lot,    # lot_override (sub-lot)
+                        all_own,            # own_tickets (exempt from stack guard)
+                        tp_val,             # tp_override → single-order mode
+                        next_idx > 0,       # skip_proximity for L2+
+                        entry_mode,         # entry_mode ('layered_dca' or 'mapped')
+                        layer_num,          # layer_num
+                    )
+
+                    if "Trade Executed" in result:
+                        ticket = _get_latest_ticket(signal_id, exclude=all_own)
+                        if ticket:
+                            layer_tickets.append(ticket)
+                    elif "spread too wide" in result or "Market closed" in result:
+                        spread_retry = True
+                        break   # retry whole layer next cycle
+                    else:
+                        layer_blocked = result
+                        break   # guard blocked — stop placing more sub-orders
+
+                if spread_retry:
+                    log.info(
+                        f"LayerWatcher [{signal_id}]: "
+                        f"L{layer_num} spread wide or market closed — retrying next tick"
+                    )
+                    # No message — retry automatically next interval
+
+                elif layer_tickets:
+                    # At least some sub-orders placed successfully
+                    session.tickets[next_idx] = layer_tickets
                     session.entries[next_idx] = price
                     next_idx += 1
 
@@ -413,38 +461,37 @@ async def watch_layered_entry(signal, signal_id: str, bot):
                     else:
                         next_msg = "\n🎯 All layers active — monitoring TPs"
 
+                    tp_labels = " / ".join(
+                        f"TP{i+1}:`{effective_tps[i % len(effective_tps)]}`"
+                        for i in range(len(layer_tickets))
+                    )
+                    tix_str = ", ".join(f"#{t}" for t in layer_tickets)
                     await _notify(bot, (
                         f"📍 *Layer {layer_num}/{actual_layers} placed @ `{price:.2f}`*\n"
                         f"`{signal.symbol} {signal.direction.upper()}`\n"
-                        f"Lot: `{lot_per_layer}` | TP: `{tp_val}` | #{ticket}"
+                        f"Lot: `{session.sub_lot} × {len(layer_tickets)}` | {tp_labels}\n"
+                        f"Tickets: {tix_str}"
                         + next_msg
                     ))
 
-                elif "spread too wide" in result or "Market closed" in result:
-                    log.info(
-                        f"LayerWatcher [{signal_id}]: "
-                        f"L{layer_num} spread wide or market closed — retrying next tick"
-                    )
-                    # No message — retry automatically next interval
-
-                else:
-                    # Guard blocked this layer
+                elif layer_blocked:
+                    # Guard blocked — no sub-orders placed
                     if next_idx == 0:
                         # L1 blocked — fatal, session over
                         pending.pop(signal_id, None)
                         upsert_signal(signal_id, signal, status="blocked")
                         session.state = "DONE"
                         await _notify(bot, (
-                            f"🚫 *Layer 1 blocked — session ended*\n\n{result}"
+                            f"🚫 *Layer 1 blocked — session ended*\n\n{layer_blocked}"
                         ))
                         return
                     else:
                         # L2+ blocked — skip this layer slot, try next
                         log.info(
                             f"LayerWatcher [{signal_id}]: "
-                            f"L{layer_num} blocked (skipped): {result.splitlines()[0]}"
+                            f"L{layer_num} blocked (skipped): {layer_blocked.splitlines()[0]}"
                         )
-                        session.tickets[next_idx] = None   # mark slot as skipped
+                        session.tickets[next_idx] = []   # mark slot as skipped
                         next_idx += 1
                         await _notify(bot, (
                             f"⚠️ *L{layer_num}/{actual_layers} skipped (guard)*\n"

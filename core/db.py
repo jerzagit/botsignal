@@ -6,6 +6,7 @@ All dashboard reads go through dashboard/app.py directly.
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 
 import pymysql
 import pymysql.cursors
@@ -13,6 +14,12 @@ import pymysql.cursors
 from core.config import DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
 
 log = logging.getLogger(__name__)
+
+_MY_TZ = timezone(timedelta(hours=8))
+
+def _today_my() -> str:
+    """Today's date in Malaysia time (UTC+8), as YYYY-MM-DD string."""
+    return datetime.now(_MY_TZ).strftime("%Y-%m-%d")
 
 
 def get_conn():
@@ -150,3 +157,149 @@ def update_trade_outcome(ticket: int, outcome: str, close_price: float,
         conn.close()
     except Exception as e:
         log.error(f"db.update_trade_outcome failed: {e}")
+
+
+# ── SNR levels ────────────────────────────────────────────────────────────────
+
+def set_snr_levels(symbol: str, prices: list[float]):
+    """Replace today's SNR levels for a symbol with a new sorted list."""
+    today = _today_my()
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM snr_levels WHERE symbol = %s AND valid_date = %s",
+                (symbol, today),
+            )
+            for p in sorted(prices):
+                cur.execute(
+                    "INSERT INTO snr_levels (symbol, price, valid_date) VALUES (%s, %s, %s)",
+                    (symbol, p, today),
+                )
+        conn.close()
+    except Exception as e:
+        log.error(f"db.set_snr_levels failed: {e}")
+
+
+def get_snr_levels(symbol: str) -> list[float]:
+    """Return today's SNR levels for a symbol, sorted ascending."""
+    today = _today_my()
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT price FROM snr_levels WHERE symbol = %s AND valid_date = %s ORDER BY price",
+                (symbol, today),
+            )
+            rows = cur.fetchall()
+        conn.close()
+        return [float(r["price"]) for r in rows]
+    except Exception as e:
+        log.error(f"db.get_snr_levels failed: {e}")
+        return []
+
+
+# ── Mapping zones ─────────────────────────────────────────────────────────────
+
+def add_zone(symbol: str, direction: str, zone_low: float, zone_high: float,
+             sl: float, tp: float) -> int | None:
+    """
+    Insert a new mapping zone for today. Returns the zone id.
+    Auto-replaces any existing unfired zone with the same symbol+direction.
+    """
+    today = _today_my()
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            # Remove existing unfired zones for same symbol+direction
+            cur.execute(
+                """DELETE FROM mapping_zones
+                   WHERE symbol = %s AND direction = %s
+                     AND valid_date = %s AND fired = FALSE""",
+                (symbol, direction, today),
+            )
+            cur.execute(
+                """INSERT INTO mapping_zones
+                       (symbol, direction, zone_low, zone_high, sl, tp, valid_date)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                (symbol, direction, zone_low, zone_high, sl, tp, today),
+            )
+            zone_id = cur.lastrowid
+        conn.close()
+        return zone_id
+    except Exception as e:
+        log.error(f"db.add_zone failed: {e}")
+        return None
+
+
+def get_today_zones(symbol: str = None, direction: str = None,
+                    active_only: bool = False) -> list[dict]:
+    """Return today's mapping zones, optionally filtered."""
+    today = _today_my()
+    conds = ["valid_date = %s"]
+    params: list = [today]
+    if symbol:
+        conds.append("symbol = %s")
+        params.append(symbol)
+    if direction:
+        conds.append("direction = %s")
+        params.append(direction)
+    if active_only:
+        conds.append("fired = FALSE")
+
+    where = " AND ".join(conds)
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT * FROM mapping_zones WHERE {where} ORDER BY id", params)
+            rows = cur.fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        log.error(f"db.get_today_zones failed: {e}")
+        return []
+
+
+def mark_zone_fired(zone_id: int, signal_id: str):
+    """Mark a zone as fired (one-shot) and link it to a signal."""
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE mapping_zones SET fired = TRUE, signal_id = %s WHERE id = %s",
+                (signal_id, zone_id),
+            )
+        conn.close()
+    except Exception as e:
+        log.error(f"db.mark_zone_fired failed: {e}")
+
+
+def delete_zone(zone_id: int) -> bool:
+    """Delete a zone by id (today only). Returns True if a row was deleted."""
+    today = _today_my()
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM mapping_zones WHERE id = %s AND valid_date = %s",
+                (zone_id, today),
+            )
+            deleted = cur.rowcount > 0
+        conn.close()
+        return deleted
+    except Exception as e:
+        log.error(f"db.delete_zone failed: {e}")
+        return False
+
+
+def clear_zones():
+    """Clear all today's mapping zones AND SNR levels."""
+    today = _today_my()
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM mapping_zones WHERE valid_date = %s", (today,))
+            cur.execute("DELETE FROM snr_levels WHERE valid_date = %s", (today,))
+        conn.close()
+    except Exception as e:
+        log.error(f"db.clear_zones failed: {e}")

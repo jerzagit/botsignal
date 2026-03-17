@@ -9,13 +9,17 @@ import asyncio
 import logging
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
-from core.config import BOT_TOKEN, YOUR_CHAT_ID, SIGNAL_EXPIRY
+from core.config import BOT_TOKEN, YOUR_CHAT_ID, SIGNAL_EXPIRY, MAP_ENABLED
 from core.signal import Signal
 from core.state  import pending, pending_closes
 from core.mt5    import execute_trade, close_position, set_breakeven, get_open_signal_groups
 from core.config import BREAKEVEN_KEEP_COUNT
+from core.db     import (
+    set_snr_levels, get_snr_levels, add_zone, get_today_zones,
+    delete_zone, clear_zones,
+)
 
 log = logging.getLogger(__name__)
 
@@ -371,12 +375,181 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.info(f"Skipped: {signal.symbol} {signal.direction} [{signal_id}]")
 
 
+# ── AutoZone commands ─────────────────────────────────────────────────────────
+
+async def cmd_snr(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/snr XAUUSD 5007 5014 5022 5035 5043 — set today's SNR levels."""
+    args = context.args or []
+    if len(args) < 2:
+        await update.message.reply_text("Usage: /snr XAUUSD 5007 5014 5022 5035 5043")
+        return
+
+    symbol = args[0].upper()
+    try:
+        prices = sorted([float(p) for p in args[1:]])
+    except ValueError:
+        await update.message.reply_text("Invalid prices. Usage: /snr XAUUSD 5007 5014 5022")
+        return
+
+    set_snr_levels(symbol, prices)
+    levels_str = ", ".join(str(int(p) if p == int(p) else p) for p in prices)
+    await update.message.reply_text(
+        f"\u2705 {len(prices)} SNR levels set for {symbol}: {levels_str}"
+    )
+    log.info(f"/snr {symbol}: {prices}")
+
+
+async def cmd_map(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/map XAUUSD buy 5011-5014 — add a buy/sell zone with auto SL/TP from SNR."""
+    if not MAP_ENABLED:
+        await update.message.reply_text("\u274c AutoZone is disabled (MAP_ENABLED=false)")
+        return
+
+    args = context.args or []
+    if len(args) < 3:
+        await update.message.reply_text("Usage: /map XAUUSD buy 5011-5014")
+        return
+
+    symbol = args[0].upper()
+    direction = args[1].lower()
+    if direction not in ("buy", "sell"):
+        await update.message.reply_text("Direction must be 'buy' or 'sell'.")
+        return
+
+    zone_str = args[2]
+    parts = zone_str.replace("\u2013", "-").split("-")
+    try:
+        zone_low = float(parts[0])
+        zone_high = float(parts[1]) if len(parts) > 1 else zone_low
+    except (ValueError, IndexError):
+        await update.message.reply_text("Invalid zone format. Use: 5011-5014")
+        return
+
+    if zone_low > zone_high:
+        zone_low, zone_high = zone_high, zone_low
+
+    # Auto-pick SL and TP from SNR levels
+    snr = get_snr_levels(symbol)
+    if not snr:
+        await update.message.reply_text(
+            f"\u274c No SNR levels found for {symbol}. Set them first with /snr"
+        )
+        return
+
+    if direction == "buy":
+        sl_candidates = [p for p in snr if p < zone_low]
+        tp_candidates = [p for p in snr if p > zone_high]
+        sl = max(sl_candidates) if sl_candidates else None
+        tp = min(tp_candidates) if tp_candidates else None
+    else:
+        sl_candidates = [p for p in snr if p > zone_high]
+        tp_candidates = [p for p in snr if p < zone_low]
+        sl = min(sl_candidates) if sl_candidates else None
+        tp = max(tp_candidates) if tp_candidates else None
+
+    if sl is None or tp is None:
+        missing = []
+        if sl is None:
+            missing.append("SL")
+        if tp is None:
+            missing.append("TP")
+        await update.message.reply_text(
+            f"\u274c No SNR level found for {', '.join(missing)}. "
+            f"Add more levels with /snr"
+        )
+        return
+
+    zone_id = add_zone(symbol, direction, zone_low, zone_high, sl, tp)
+    dir_emoji = "\U0001f7e2" if direction == "buy" else "\U0001f534"
+
+    def _fmt(v):
+        return str(int(v)) if v == int(v) else str(v)
+
+    await update.message.reply_text(
+        f"\u2705 Zone #{zone_id} mapped!\n"
+        f"{dir_emoji} {direction.upper()} {_fmt(zone_low)}-{_fmt(zone_high)}\n"
+        f"SL: {_fmt(sl)} | TP: {_fmt(tp)}"
+    )
+    log.info(f"/map {symbol} {direction} {zone_low}-{zone_high} SL={sl} TP={tp}")
+
+
+async def cmd_zones(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/zones — list today's zones + SNR levels."""
+    zones = get_today_zones()
+    # Gather unique symbols from zones to show their SNR
+    symbols = sorted(set(z["symbol"] for z in zones)) if zones else ["XAUUSD"]
+
+    lines = ["\U0001f5fa *AutoZone — Today's Zones*\n"]
+
+    for sym in symbols:
+        snr = get_snr_levels(sym)
+        if snr:
+            snr_str = " | ".join(str(int(p) if p == int(p) else p) for p in snr)
+            lines.append(f"\U0001f4ca *{sym} SNR:* `{snr_str}`\n")
+
+    if not zones:
+        lines.append("_No zones mapped yet. Use /map to add zones._")
+    else:
+        for z in zones:
+            zid = z["id"]
+            d = z["direction"].upper()
+            d_emoji = "\U0001f7e2" if z["direction"] == "buy" else "\U0001f534"
+            zl = float(z["zone_low"])
+            zh = float(z["zone_high"])
+            sl = float(z["sl"])
+            tp = float(z["tp"])
+            fired = z["fired"]
+
+            def _fmt(v):
+                return str(int(v)) if v == int(v) else str(v)
+
+            status = "\u2705 Fired" if fired else "\u23f3 Watching"
+            lines.append(
+                f"#{zid} {d_emoji} {d} `{_fmt(zl)}-{_fmt(zh)}` "
+                f"SL:`{_fmt(sl)}` TP:`{_fmt(tp)}` — {status}"
+            )
+
+    await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+
+async def cmd_delzone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/delzone 3 — delete zone by ID."""
+    args = context.args or []
+    if not args:
+        await update.message.reply_text("Usage: /delzone <zone_id>")
+        return
+
+    try:
+        zone_id = int(args[0])
+    except ValueError:
+        await update.message.reply_text("Zone ID must be a number.")
+        return
+
+    if delete_zone(zone_id):
+        await update.message.reply_text(f"\u2705 Zone #{zone_id} deleted.")
+        log.info(f"/delzone {zone_id}")
+    else:
+        await update.message.reply_text(f"\u274c Zone #{zone_id} not found (today).")
+
+
+async def cmd_clearmap(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/clearmap — clear all today's zones + SNR levels."""
+    clear_zones()
+    await update.message.reply_text("\u2705 All zones and SNR levels cleared for today.")
+    log.info("/clearmap executed")
+
+
 # ── Start notifier ─────────────────────────────────────────────────────────────
 
 async def start_notifier():
     global _app
     _app = Application.builder().token(BOT_TOKEN).build()
     _app.add_handler(CallbackQueryHandler(handle_callback))
+    _app.add_handler(CommandHandler("snr", cmd_snr))
+    _app.add_handler(CommandHandler("map", cmd_map))
+    _app.add_handler(CommandHandler("zones", cmd_zones))
+    _app.add_handler(CommandHandler("delzone", cmd_delzone))
+    _app.add_handler(CommandHandler("clearmap", cmd_clearmap))
     await _app.initialize()
     await _app.start()
     await _app.updater.start_polling()

@@ -1,6 +1,6 @@
 # SignalBot
 
-Fully automatic Telegram-to-MT5 trading bot. Reads your mentor's signals, watches price, and builds positions using DCA-style layered entries — no tapping required.
+Fully automatic Telegram-to-MT5 trading bot. Reads your mentor's signals, watches price, and builds positions using DCA-style layered entries — no tapping required. Includes **AutoZone** for mapping SNR levels and auto-entering when price reaches your zones.
 
 ---
 
@@ -38,12 +38,14 @@ Bot calculates total lot + DYNAMIC layer count
   → $200 account → 3 layers | $500 → 5 | $1000+ → 7
         ↓
 "📍 Layer 1/N placed" — L1 fires when price enters zone
+  Each layer split by TPs: 0.06 at TP1 + 0.06 at TP2
         ↓
 Price dips 35 pips deeper → "📍 Layer 2/N placed" (better entry)
-        ↓
-Price dips 35 more pips → "📍 Layer 3/N placed" (best entry)
+  Same TP split: 0.06 at TP1 + 0.06 at TP2
         ↓
 (continues for all N layers)
+        ↓
+Profit Lock: any sub-order at +50p → SL to breakeven, TP to +100p
         ↓
 When upper layers hit TP → deepest layer moves to breakeven
         ↓
@@ -66,9 +68,10 @@ signalbot/
 │   ├── risk.py               ← Lot calculator (margin % ÷ SL distance)
 │   ├── mt5.py                ← MT5 connection, 6 guards, trade execution
 │   ├── listener.py           ← Telethon: watches group as your account
-│   ├── notifier.py           ← Telegram bot: close alert buttons
+│   ├── notifier.py           ← Telegram bot: commands + close alert buttons
 │   ├── watcher.py            ← Standard price watcher (LAYER_MODE=false)
 │   ├── layer_watcher.py      ← DCA layered entry state machine (LAYER_MODE=true)
+│   ├── map_watcher.py        ← AutoZone: background price monitor for mapped zones
 │   ├── state.py              ← In-memory pending signals + close plans
 │   └── db.py                 ← MySQL write functions
 │
@@ -91,6 +94,7 @@ signalbot/
 │
 ├── test_margin_guard.py      ← Unit tests for all trade guards
 ├── test_layer.py             ← Live UAT test: simulates a buy signal through layered DCA
+├── test_tp_split.py          ← Live UAT test: simulates a sell signal with TP splitting
 └── sim_dca.py                ← Offline profit/risk simulator for DCA scenarios
 ```
 
@@ -196,6 +200,14 @@ RISK_PERCENT=0.10              # 10% of free margin to risk per trade
 MIN_LOT=0.01
 MAX_LOT=0.50
 
+# ── Profit Lock (auto-breakeven + TP override) ───────
+PROFIT_LOCK_ENABLED=true       # enable/disable
+PROFIT_LOCK_PIPS=50            # trigger at +50 pips profit
+PROFIT_LOCK_TP_PIPS=100        # push TP to +100 pips from entry
+
+# ── AutoZone (auto-entry from mapped zones) ──────────
+MAP_ENABLED=true               # enable/disable AutoZone
+
 # ── Layered DCA entry ─────────────────────────────────
 LAYER_MODE=false               # true = DCA layers | false = TRADE_SPLIT
 LAYER_COUNT=7                  # max layers (actual count is dynamic)
@@ -279,18 +291,32 @@ LN entry:  L1_entry − N×35 pips       (each layer 35 pips further)
 
 For sell signals, pips are added (higher price = better sell entry).
 
-### TP assignment
+### TP splitting
+
+Each layer's lot is split across signal TPs — one sub-order per TP:
 
 ```
-L1 … LN-1  →  cycle through Hafiz's TP list (quick exits)
-LN (deepest) →  furthest TP (free ride position)
+Signal: SELL @5023-5026, SL 5029, TP1 5018, TP2 5016
+L1 lot = 0.12 → 0.06 at TP1 (5018) + 0.06 at TP2 (5016)
+L2 lot = 0.12 → 0.06 at TP1 (5018) + 0.06 at TP2 (5016)
 ```
+
+If `sub_lot < MIN_LOT`, the split count is automatically reduced (e.g., 2 TPs but lot too small → 1 order with TP1 only).
+
+### Profit Lock interaction
+
+Profit Lock works independently on each sub-order:
+- Sub-order at TP1 (30p away): hits TP1 before Profit Lock triggers → profit secured normally
+- Sub-order at TP2 (50p+ away): Profit Lock fires at +50p → SL→breakeven, TP pushed to +100p
+- Short TPs close naturally; long TPs get enhanced by Profit Lock
+
+L2 enters deeper (better price), so TPs are further away from L2's entry — Profit Lock is **more likely** to fire on L2 sub-orders, giving them extra protection.
 
 ### Breakeven trigger
 
-When all upper layers (L1 … LN-1) close at TP:
-→ deepest layer (LN) automatically moves SL to breakeven.
-→ You've locked profit and LN runs risk-free to the furthest TP.
+When all upper layers' sub-orders (L1 … LN-1) close at TP:
+→ all deepest layer (LN) sub-orders automatically move SL to breakeven.
+→ You've locked profit and LN runs risk-free.
 
 ### Risk preservation
 
@@ -304,21 +330,111 @@ If price never reaches L2 or beyond, only L1 is at risk — a fraction of planne
 ### Telegram messages
 
 ```
-📍 Layer 1/3 placed @ 3200.00
-   XAUUSD BUY | Lot: 0.01 | TP: 3220.00
-   📍 L2 triggers @ 3196.50 (35p deeper)
+📍 Layer 1/2 placed @ 5024.00
+   XAUUSD SELL
+   Lot: 0.06 × 2 | TP1:5018 / TP2:5016
+   Tickets: #258016314, #258016325
+   📍 L2 triggers @ 5059.00 (35p deeper)
 
-📍 Layer 2/3 placed @ 3196.50
-   XAUUSD BUY | Lot: 0.01 | TP: 3250.00
-   📍 L3 triggers @ 3193.00 (35p deeper)
-
-📍 Layer 3/3 placed @ 3193.00
-   XAUUSD BUY | Lot: 0.01 | TP: 3220.00
+📍 Layer 2/2 placed @ 5059.00
+   XAUUSD SELL
+   Lot: 0.06 × 2 | TP1:5018 / TP2:5016
+   Tickets: #258016400, #258016401
    🎯 All layers active — monitoring TPs
 
-🔒 L1–L2 TP secured → L3 free ride!
-   XAUUSD BUY | #12345678 moved to breakeven ♻️
+🔒 L1 TP secured → L2 free ride!
+   XAUUSD SELL | 2 position(s) moved to breakeven ♻️
 ```
+
+---
+
+## AutoZone — auto-entry from mapped zones
+
+AutoZone lets you map SNR (Supply & Demand / Support & Resistance) levels and buy/sell zones each morning. When price enters a mapped zone during the day, the bot automatically enters a trade — using the same guards, risk calc, and DCA pipeline as signal entries.
+
+### Setup via Telegram commands
+
+```
+/snr XAUUSD 5007 5014 5022 5035 5043    — set today's SNR levels
+/map XAUUSD buy 5011-5014               — add a buy zone (SL/TP auto-picked from SNR)
+/map XAUUSD sell 5043-5046              — add a sell zone
+/zones                                   — list today's zones + SNR levels
+/delzone 3                               — delete zone #3
+/clearmap                                — clear all zones + SNR levels
+```
+
+### SL/TP auto-pick from SNR levels
+
+| Zone type | SL | TP |
+|-----------|----|----|
+| BUY 5011-5014 | Nearest SNR **below** zone_low (5007) | Nearest SNR **above** zone_high (5022) |
+| SELL 5043-5046 | Nearest SNR **above** zone_high | Nearest SNR **below** zone_low |
+
+If no SNR level exists in the required direction, the `/map` command is rejected with an error.
+
+### How it works
+
+```
+Morning:  /snr XAUUSD 5007 5014 5022 5035 5043
+          /map XAUUSD buy 5011-5014
+          → SL=5007, TP=5022 auto-picked, zone saved
+
+During day:  AutoZone watcher checks price every 30s
+             Price drops to 5013 (inside 5011-5014)
+             → Zone fires! Builds Signal object
+             → All 6 guards run (margin, stack, RR, spread, proximity, lot)
+             → LAYER_MODE=true → DCA layered entry
+             → Zone marked fired (one-shot, no re-entry)
+             → Telegram notification sent
+
+Midnight MY: Zones auto-expire (valid_date no longer matches)
+```
+
+### Signal entry vs AutoZone entry
+
+| | Signal Entry | AutoZone Entry |
+|---|---|---|
+| Trigger | Hafiz sends signal in group | Price reaches mapped zone |
+| SL/TP | From signal | Auto-picked from SNR levels |
+| Entry mode | Single or DCA (LAYER_MODE) | Same — follows LAYER_MODE |
+| Guards | All 6 guards | All 6 guards |
+| Expiry | 30 min (SIGNAL_EXPIRY) | Midnight Malaysia time |
+| Confirmation | EXECUTE/SKIP button | Fully automatic |
+
+### .env setting
+
+```env
+MAP_ENABLED=true    # enable/disable AutoZone (default: true)
+```
+
+---
+
+## Profit Lock — auto-breakeven + TP override
+
+When a trade is running +50 pips in profit, the bot automatically:
+1. **Moves SL to breakeven** (entry price) — trade becomes risk-free
+2. **Pushes TP to +100 pips** from entry — aims for bigger wins
+
+The dashboard poller checks all open bot positions every 60 seconds. Once triggered, the position can only end at breakeven ($0) or at the extended TP (profit).
+
+### Settings
+
+```env
+PROFIT_LOCK_ENABLED=true       # enable/disable (default: true)
+PROFIT_LOCK_PIPS=50            # trigger at +50 pips profit
+PROFIT_LOCK_TP_PIPS=100        # push TP to +100 pips from entry
+```
+
+### Rules
+
+- Only applies to bot-placed positions (magic = 20250101)
+- Never reduces TP — if original TP is already further than +100p, it's kept
+- Positions already at breakeven are skipped (no re-modification each cycle)
+- Works alongside DCA layer watcher breakeven (separate mechanism)
+- With TP splitting, each sub-order is checked independently:
+  - Short TPs (< 50p) close naturally before Profit Lock triggers
+  - Long TPs (≥ 50p) get SL→breakeven + TP pushed to +100p
+  - L2 sub-orders are more likely to trigger Profit Lock (deeper entry = further from TP)
 
 ---
 
@@ -404,7 +520,7 @@ TRADE_SPLIT=5, lot=0.01  →  1 × 0.01 lot  (can't split below MIN_LOT)
 TRADE_SPLIT=5, lot=0.05  →  5 × 0.01 lot  ✅
 ```
 
-> When `LAYER_MODE=true`, TRADE_SPLIT is ignored — each layer is always 1 order.
+> When `LAYER_MODE=true`, TRADE_SPLIT is ignored — each layer is split by signal TPs instead (one sub-order per TP).
 
 ---
 
@@ -420,6 +536,7 @@ lot_size     = round to broker volume step
 
 Standard mode:  split_lot = lot_size / actual_splits
 Layered mode:   layer_lot = lot_size / actual_layers  (dynamic)
+                sub_lot   = layer_lot / num_TPs       (TP splitting)
 ```
 
 If SL hits on all positions, max loss = `RISK_PERCENT` × free margin.
@@ -508,6 +625,7 @@ For remote access run `ngrok http 5000` in a separate terminal.
 | `EXPIRED` | 30 min passed, price never reached zone |
 | `PENDING` | Watcher active — waiting for price |
 | `MANUAL` | Trade opened directly in MT5 |
+| `MAP` | Trade triggered by AutoZone |
 | `WIN` | Closed in profit |
 | `LOSS` | Closed at a loss |
 | `OPEN` | Trade still running |

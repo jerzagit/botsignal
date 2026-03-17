@@ -13,7 +13,10 @@ import MetaTrader5 as mt5
 
 from core.db  import get_conn, update_trade_outcome, ensure_manual_trade
 from core.mt5 import mt5_connect
-from core.config import MT5_SYMBOL_SUFFIX
+from core.config import (
+    MT5_SYMBOL_SUFFIX, SL_PIP_SIZE,
+    PROFIT_LOCK_ENABLED, PROFIT_LOCK_PIPS, PROFIT_LOCK_TP_PIPS,
+)
 
 log = logging.getLogger(__name__)
 POLL_INTERVAL = 60   # 1 minute
@@ -106,6 +109,74 @@ def sync_open_positions():
             log.info(f"Poller: manual trade detected — ticket={pos.ticket} {symbol} {direction}")
 
 
+def check_profit_lock():
+    """
+    Profit Lock: when a bot position is +PROFIT_LOCK_PIPS in profit,
+    move SL to breakeven and push TP to +PROFIT_LOCK_TP_PIPS from entry.
+    Called inside poll_loop() with MT5 session already open.
+    """
+    if not PROFIT_LOCK_ENABLED:
+        return
+
+    positions = mt5.positions_get()
+    if not positions:
+        return
+
+    for pos in positions:
+        if pos.magic != 20250101:   # only bot-placed positions
+            continue
+
+        entry  = pos.price_open
+        is_buy = (pos.type == 0)
+
+        # Calculate profit in pips
+        profit_pts  = (pos.price_current - entry) if is_buy else (entry - pos.price_current)
+        profit_pips = profit_pts / SL_PIP_SIZE
+
+        if profit_pips < PROFIT_LOCK_PIPS:
+            continue
+
+        # Calculate target SL (breakeven) and TP (+100p from entry)
+        new_sl = entry
+        if is_buy:
+            new_tp = round(entry + PROFIT_LOCK_TP_PIPS * SL_PIP_SIZE, 2)
+        else:
+            new_tp = round(entry - PROFIT_LOCK_TP_PIPS * SL_PIP_SIZE, 2)
+
+        # Never reduce TP (if original is already further, keep it)
+        if is_buy and pos.tp > 0 and pos.tp > new_tp:
+            new_tp = pos.tp
+        elif not is_buy and pos.tp > 0 and pos.tp < new_tp:
+            new_tp = pos.tp
+
+        # Skip if already fully locked (SL at BE and TP at target)
+        sl_at_be = (is_buy and pos.sl >= entry) or (not is_buy and pos.sl > 0 and pos.sl <= entry)
+        tp_at_target = (pos.tp == new_tp)
+        if sl_at_be and tp_at_target:
+            continue
+
+        # Modify position
+        request = {
+            "action":   mt5.TRADE_ACTION_SLTP,
+            "position": pos.ticket,
+            "symbol":   pos.symbol,
+            "sl":       new_sl,
+            "tp":       new_tp,
+        }
+        result = mt5.order_send(request)
+        direction = "BUY" if is_buy else "SELL"
+        if result.retcode == mt5.TRADE_RETCODE_DONE:
+            log.info(
+                f"ProfitLock: #{pos.ticket} {pos.symbol} {direction} "
+                f"+{profit_pips:.0f}p → SL={new_sl} TP={new_tp}"
+            )
+        else:
+            log.warning(
+                f"ProfitLock: #{pos.ticket} modify failed: "
+                f"{result.comment} (code {result.retcode})"
+            )
+
+
 def poll_loop():
     """Main loop — runs forever in a daemon thread."""
     while True:
@@ -123,6 +194,12 @@ def poll_loop():
                     check_ticket(ticket)
                 except Exception as e:
                     log.error(f"poller error ticket={ticket}: {e}")
+
+            # Step 3: profit lock — auto-breakeven + TP override on profitable positions
+            try:
+                check_profit_lock()
+            except Exception as e:
+                log.error(f"poller.check_profit_lock failed: {e}")
 
             mt5.shutdown()
         else:

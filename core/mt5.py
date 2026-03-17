@@ -422,6 +422,35 @@ def set_breakeven(ticket: int) -> str:
     return f"🔒 Breakeven set — `{pos.symbol} {direction}` #{ticket} SL → `{entry}`"
 
 
+def modify_sl_tp(ticket: int, new_sl: float = None, new_tp: float = None) -> str:
+    """Modify SL and/or TP on an open position. Keeps existing value for any param not provided."""
+    if not mt5_connect():
+        return "❌ Could not connect to MT5."
+
+    positions = mt5.positions_get(ticket=ticket)
+    if not positions:
+        mt5.shutdown()
+        return f"❌ Position #{ticket} not found."
+
+    pos = positions[0]
+    request = {
+        "action":   mt5.TRADE_ACTION_SLTP,
+        "position": ticket,
+        "symbol":   pos.symbol,
+        "sl":       new_sl if new_sl is not None else pos.sl,
+        "tp":       new_tp if new_tp is not None else pos.tp,
+    }
+
+    result = mt5.order_send(request)
+    mt5.shutdown()
+
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        return f"❌ Modify failed #{ticket}: {result.comment}"
+
+    direction = "BUY" if pos.type == 0 else "SELL"
+    return f"✅ Modified {pos.symbol} {direction} #{ticket} SL→{request['sl']} TP→{request['tp']}"
+
+
 def get_open_signal_groups(symbol: str = None) -> list:
     """
     Return open MT5 positions grouped by their signal_id from MySQL.

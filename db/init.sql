@@ -38,6 +38,31 @@ CREATE TABLE IF NOT EXISTS trades (
         ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS snr_levels (
+    id          INT            AUTO_INCREMENT PRIMARY KEY,
+    symbol      VARCHAR(20)    NOT NULL,
+    price       DECIMAL(12,5)  NOT NULL,
+    valid_date  DATE           NOT NULL,
+    created_at  DATETIME       DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_symbol_date (symbol, valid_date)
+);
+
+CREATE TABLE IF NOT EXISTS mapping_zones (
+    id          INT            AUTO_INCREMENT PRIMARY KEY,
+    symbol      VARCHAR(20)    NOT NULL,
+    direction   VARCHAR(4)     NOT NULL,
+    zone_low    DECIMAL(12,5)  NOT NULL,
+    zone_high   DECIMAL(12,5)  NOT NULL,
+    sl          DECIMAL(12,5)  NOT NULL,
+    tp          DECIMAL(12,5)  NOT NULL,
+    valid_date  DATE           NOT NULL,
+    fired       BOOLEAN        DEFAULT FALSE,
+    signal_id   VARCHAR(64)    NULL,
+    created_at  DATETIME       DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_valid_date (valid_date),
+    INDEX idx_active (valid_date, fired)
+);
+
 CREATE TABLE IF NOT EXISTS guard_events (
     id             INT           AUTO_INCREMENT PRIMARY KEY,
     fired_at       DATETIME      DEFAULT CURRENT_TIMESTAMP,

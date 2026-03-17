@@ -17,12 +17,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from flask import Flask, render_template, jsonify, request
-from core.db import get_conn
+from core.db import get_conn, get_today_zones, get_snr_levels
 from core.config import (
     MIN_MARGIN_LEVEL, MAX_SPREAD_PIPS, MIN_RR_RATIO,
     ENTRY_MAX_DISTANCE_PIPS, BLOCK_SAME_DIRECTION_STACK,
     SL_MIN_PIPS, TP_ENFORCE_PIPS, RISK_PERCENT, MIN_LOT, MAX_LOT,
-    MT5_SYMBOL_SUFFIX, SL_PIP_SIZE, ENV_MODE,
+    MT5_SYMBOL_SUFFIX, SL_PIP_SIZE, ENV_MODE, MAP_ENABLED,
+    PROFIT_LOCK_ENABLED, PROFIT_LOCK_PIPS, PROFIT_LOCK_TP_PIPS,
 )
 from dashboard.poller import start_poller
 
@@ -186,6 +187,10 @@ def api_guards_config():
         "lot_calc":  {"threshold": f"{MIN_LOT}–{MAX_LOT} lot",       "enabled": True},
         "risk":      {"threshold": f"{int(RISK_PERCENT*100)}% free margin"},
         "auto_tp":   {"threshold": f"SL < {SL_MIN_PIPS}p => TP set to {TP_ENFORCE_PIPS}p"},
+        "profit_lock": {
+            "threshold": f"+{PROFIT_LOCK_PIPS}p → BE + TP {PROFIT_LOCK_TP_PIPS}p",
+            "enabled": PROFIT_LOCK_ENABLED,
+        },
     })
 
 
@@ -224,6 +229,38 @@ def api_guards_live():
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/zones")
+def api_zones():
+    """Return today's mapping zones + SNR levels."""
+    zones = get_today_zones()
+    # Collect unique symbols
+    symbols = sorted(set(z["symbol"] for z in zones)) if zones else ["XAUUSD"]
+
+    snr_data = {}
+    for sym in symbols:
+        snr_data[sym] = get_snr_levels(sym)
+
+    zone_list = []
+    for z in zones:
+        zone_list.append({
+            "id":        z["id"],
+            "symbol":    z["symbol"],
+            "direction": z["direction"],
+            "zone_low":  round(float(z["zone_low"]), 2),
+            "zone_high": round(float(z["zone_high"]), 2),
+            "sl":        round(float(z["sl"]), 2),
+            "tp":        round(float(z["tp"]), 2),
+            "fired":     bool(z["fired"]),
+            "signal_id": z["signal_id"],
+        })
+
+    return jsonify({
+        "enabled":    MAP_ENABLED,
+        "zones":      zone_list,
+        "snr_levels": snr_data,
+    })
 
 
 @app.route("/api/guards/log")

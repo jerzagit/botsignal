@@ -119,6 +119,32 @@
     .badge.lot_calc  { background: #f3f4f6; color: #6b7280; }
     .badge.dca       { background: #dbeafe; color: #1e40af; font-weight: 600; }
     .badge.direct    { background: #f3f4f6; color: #374151; }
+    .badge.mapped    { background: #fef3c7; color: #92400e; font-weight: 600; }
+    .badge.fired     { background: #dcfce7; color: #15803d; }
+    .badge.watching  { background: #dbeafe; color: #1d4ed8; }
+
+    /* SNR chips */
+    .snr-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+    .snr-chip {
+      display: inline-block; padding: 3px 10px; border-radius: 14px;
+      font-size: 0.78rem; font-weight: 600; background: #f3f4f6; color: #374151;
+      border: 1px solid #e5e7eb;
+    }
+
+    /* Zone cards */
+    .zone-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .zone-card {
+      background: white; border-radius: 10px; padding: 14px 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+      border-left: 4px solid #e5e7eb;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .zone-card.buy-zone  { border-left-color: #16a34a; }
+    .zone-card.sell-zone { border-left-color: #dc2626; }
+    .zone-card.is-fired  { opacity: 0.6; }
+    .zone-card .zc-header { display: flex; justify-content: space-between; align-items: center; }
+    .zone-card .zc-title  { font-size: 0.82rem; font-weight: 700; }
+    .zone-card .zc-detail { font-size: 0.78rem; color: #6b7280; }
 
     /* ── Date filter bar ──────────────────────────────────── */
     .filter-bar {
@@ -276,6 +302,18 @@
       <div class="g-threshold" id="gc-autotp-thresh">—</div>
       <div class="g-live na">Applied per signal</div>
     </div>
+    <div class="guard-card info" id="gc-profitlock">
+      <div class="g-title">Profit Lock</div>
+      <div class="g-threshold" id="gc-profitlock-thresh">—</div>
+      <div class="g-live na" id="gc-profitlock-live">Monitors open positions</div>
+    </div>
+  </div>
+
+  <!-- ── AutoZone Section ──────────────────────────────────────── -->
+  <div class="section-title" style="margin-top:8px;" id="map-section-title">AutoZone</div>
+  <div id="map-snr-bar"></div>
+  <div class="zone-cards" id="zone-cards">
+    <div style="color:#aaa;font-size:0.85rem;padding:12px;">Loading...</div>
   </div>
 
   <!-- Guard fire log -->
@@ -414,6 +452,7 @@
 
   function entryBadge(mode, layerNum) {
     if (mode === 'layered_dca') return `<span class="badge dca">DCA L${layerNum || '?'}</span>`;
+    if (mode === 'mapped')      return `<span class="badge mapped">MAP${layerNum ? ' L'+layerNum : ''}</span>`;
     if (mode === 'direct')      return `<span class="badge direct">DIRECT</span>`;
     return '';
   }
@@ -528,6 +567,13 @@
         set('gc-lot_calc-thresh',  d.lot_calc?.threshold  || '—');
         set('gc-risk-thresh',      d.risk?.threshold      || '—');
         set('gc-autotp-thresh',    d.auto_tp?.threshold   || '—');
+        set('gc-profitlock-thresh', d.profit_lock?.threshold || '—');
+        if (d.profit_lock && !d.profit_lock.enabled) {
+          const plCard = document.getElementById('gc-profitlock');
+          if (plCard) {
+            document.getElementById('gc-profitlock-live').textContent = 'Disabled';
+          }
+        }
 
         // Environment badge
         const envBadge = document.getElementById('env-badge');
@@ -642,12 +688,81 @@
       });
   }
 
+  // ── Load mapping zones ───────────────────────────────────────────
+  function loadZones() {
+    fetch('/api/zones')
+      .then(r => r.json())
+      .then(d => {
+        const title = document.getElementById('map-section-title');
+        if (!d.enabled) {
+          title.textContent = 'AutoZone (Disabled)';
+          document.getElementById('zone-cards').innerHTML =
+            '<div style="color:#aaa;font-size:0.85rem;padding:12px;">MAP_ENABLED=false</div>';
+          document.getElementById('map-snr-bar').innerHTML = '';
+          return;
+        }
+
+        title.textContent = 'AutoZone';
+
+        // SNR levels
+        const snrBar = document.getElementById('map-snr-bar');
+        let snrHtml = '';
+        for (const [sym, levels] of Object.entries(d.snr_levels || {})) {
+          if (levels.length) {
+            snrHtml += `<div style="margin-bottom:6px;"><strong style="font-size:0.78rem;color:#555;">${sym} SNR:</strong> <div class="snr-chips" style="display:inline-flex;">`;
+            levels.forEach(p => {
+              const v = p === Math.floor(p) ? p.toFixed(0) : p.toString();
+              snrHtml += `<span class="snr-chip">${v}</span>`;
+            });
+            snrHtml += '</div></div>';
+          }
+        }
+        snrBar.innerHTML = snrHtml;
+
+        // Zone cards
+        const container = document.getElementById('zone-cards');
+        if (!d.zones.length) {
+          container.innerHTML = '<div style="color:#aaa;font-size:0.85rem;padding:12px;">No AutoZone zones. Send /map via Telegram to add zones.</div>';
+          return;
+        }
+
+        let html = '';
+        d.zones.forEach(z => {
+          const dirClass = z.direction === 'buy' ? 'buy-zone' : 'sell-zone';
+          const firedClass = z.fired ? 'is-fired' : '';
+          const dirBadge = z.direction === 'buy'
+            ? '<span class="badge buy">BUY</span>'
+            : '<span class="badge sell">SELL</span>';
+          const statusBadge = z.fired
+            ? '<span class="badge fired">Fired</span>'
+            : '<span class="badge watching">Watching</span>';
+
+          html += `
+            <div class="zone-card ${dirClass} ${firedClass}">
+              <div class="zc-header">
+                <span class="zc-title">#${z.id} ${z.symbol} ${dirBadge}</span>
+                ${statusBadge}
+              </div>
+              <div class="zc-detail">Zone: ${fmt(z.zone_low)}\u2013${fmt(z.zone_high)}</div>
+              <div class="zc-detail">SL: ${fmt(z.sl)} | TP: ${fmt(z.tp)}</div>
+              ${z.signal_id ? `<div class="zc-detail">Signal: ${z.signal_id}</div>` : ''}
+            </div>`;
+        });
+        container.innerHTML = html;
+      })
+      .catch(() => {
+        document.getElementById('zone-cards').innerHTML =
+          '<div style="color:#aaa;font-size:0.85rem;padding:12px;">Could not load zones.</div>';
+      });
+  }
+
   function loadAll() {
     loadStats();
     loadSignals();
     loadGuardConfig();
     loadGuardLive();
     loadGuardLog();
+    loadZones();
     document.getElementById('last-updated').textContent =
       'Last updated: ' + new Date().toLocaleTimeString();
   }
