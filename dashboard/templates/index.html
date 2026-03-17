@@ -69,6 +69,8 @@
     .badge.loss     { background: #fee2e2; color: #b91c1c; }
     .badge.open     { background: #f3f4f6; color: #6b7280; }
     .badge.manual   { background: #ede9fe; color: #6d28d9; }
+    .badge.env-demo { background: #dcfce7; color: #15803d; font-size: 0.75rem; padding: 3px 10px; }
+    .badge.env-live { background: #fee2e2; color: #b91c1c; font-size: 0.75rem; padding: 3px 10px; }
 
     .tps { color: #555; }
     .empty { text-align: center; padding: 40px; color: #aaa; }
@@ -150,7 +152,7 @@
 <body>
 
 <header>
-  <h1>SignalBot Dashboard</h1>
+  <h1>SignalBot Dashboard <span id="env-badge" class="badge" style="margin-left:10px;">—</span></h1>
   <span id="last-updated">Loading...</span>
 </header>
 
@@ -526,6 +528,16 @@
         set('gc-lot_calc-thresh',  d.lot_calc?.threshold  || '—');
         set('gc-risk-thresh',      d.risk?.threshold      || '—');
         set('gc-autotp-thresh',    d.auto_tp?.threshold   || '—');
+
+        // Environment badge
+        const envBadge = document.getElementById('env-badge');
+        if (d.env_mode === 'live') {
+          envBadge.textContent = 'LIVE';
+          envBadge.className = 'badge env-live';
+        } else {
+          envBadge.textContent = 'DEMO';
+          envBadge.className = 'badge env-demo';
+        }
 
         // Stack guard: grey out if disabled
         if (d.stack && !d.stack.enabled) {

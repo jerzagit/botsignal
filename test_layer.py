@@ -2,15 +2,14 @@
 test_layer.py
 Simulates a Hafiz BUY signal going through the full layered DCA entry system.
 
-- Fetches current XAUUSD price from MT5
-- Builds a realistic signal (entry = current price, SL -55p, TP1 +70p, TP2 +120p)
-- Adds it to `pending` (as listener.py would)
-- Logs to MySQL
-- Runs watch_layered_entry() — same path as the live bot
+Signal: BUY XAUUSD 4996–5000  |  SL 50 pips  |  TP 80 pips
+  entry_mid = 4998.0
+  SL  = 4993.0  (50p below mid)
+  TP  = 5006.0  (80p above mid)
+  RR  = 1.6 ✓
 
-L1 fires immediately (price is already in zone).
-L2 fires when price drops 35 pips from L1 entry.
-L3 fires when price drops 70 pips from L1 entry.
+Watcher waits for price to drop into zone (≤5000), then L1 fires.
+
 
 Run:  python test_layer.py
 Stop: Ctrl+C  (positions stay alive in MT5)
@@ -47,7 +46,7 @@ from core.state         import pending
 from core.layer_watcher import watch_layered_entry
 
 
-# ── 1. Get current market price ───────────────────────────────────────────────
+# ── 1. Verify MT5 connection + get live price for info ────────────────────────
 if not mt5_connect():
     print("❌ Cannot connect to MT5 — is it open as Administrator?")
     sys.exit(1)
@@ -60,44 +59,56 @@ if tick is None:
     print(f"❌ Cannot get price for {symbol_full}")
     sys.exit(1)
 
-entry  = tick.ask
-sl     = round(entry - 50 * SL_PIP_SIZE, 2)   # 50 pip SL
-tp1    = round(entry + 80 * SL_PIP_SIZE, 2)   # TP1: 80 pips  (RR = 1.6 ✓)
-tp2    = round(entry + 140 * SL_PIP_SIZE, 2)  # TP2: 140 pips (free ride target)
+current_price = tick.ask
 
-print("=" * 55)
+# ── 2. Build signal exactly as Hafiz would send it ────────────────────────────
+#    BUY @ 5006  |  SL 5000  |  TP 5020  |  RR=2.33
+ENTRY_LOW  = 5006.0
+ENTRY_HIGH = 5006.0
+entry_mid  = 5006.0
+sl         = 5000.0
+tp1        = 5020.0
+
+sl_pips = round((entry_mid - sl)  / SL_PIP_SIZE, 1)
+tp_pips = round((tp1 - entry_mid) / SL_PIP_SIZE, 1)
+rr      = round(tp_pips / sl_pips, 2)
+
+# Layer trigger preview
+l2_trigger = round(ENTRY_HIGH - LAYER2_PIPS * SL_PIP_SIZE, 2)
+
+print("=" * 58)
 print("  SignalBot — Layered DCA Entry TEST")
-print("=" * 55)
-print(f"  Symbol  : {symbol_full}")
-print(f"  Entry   : {entry}  (current ask — L1 fires immediately)")
-print(f"  SL      : {sl}  (50 pips below)")
-print(f"  TP1     : {tp1}  (80 pips — RR 1.6 ✓ — upper layers)")
-print(f"  TP2     : {tp2}  (140 pips — deepest layer free ride)")
-print(f"  Max layers configured : {LAYER_COUNT}")
-print(f"  L2 trigger  : ~{round(entry - LAYER2_PIPS * SL_PIP_SIZE, 2)}  ({LAYER2_PIPS}p below L1)")
-print(f"  L3 trigger  : ~{round(entry - 2 * LAYER2_PIPS * SL_PIP_SIZE, 2)}  ({LAYER2_PIPS*2}p below L1)")
-print("=" * 55)
+print("=" * 58)
+print(f"  Symbol       : {symbol_full}")
+print(f"  Current price: {current_price}  (watcher waits for zone)")
+print(f"  Entry zone   : {ENTRY_LOW} – {ENTRY_HIGH}  (mid {entry_mid})")
+print(f"  SL           : {sl}  ({sl_pips}p below mid)")
+print(f"  TP           : {tp1}  ({tp_pips}p above mid)")
+print(f"  RR           : {rr}  ({'✓ PASS' if rr >= 1.4 else '✗ FAIL — guard will block'}  min=1.4)")
+print(f"  Layer gap    : {LAYER2_PIPS} pips  |  Max configured: {LAYER_COUNT}")
+print(f"  L1 fires at  : ≤{ENTRY_HIGH}  (price enters zone)")
+print(f"  L2 fires at  : ~{l2_trigger}  ({LAYER2_PIPS}p below L1)")
+print("=" * 58)
 print()
 
-# ── 2. Build signal (mimics what listener.py produces) ────────────────────────
+# ── 3. Build signal (mimics what listener.py produces) ────────────────────────
 signal_id = uuid.uuid4().hex[:8]
 signal = Signal(
     symbol     = "XAUUSD",
     direction  = "buy",
-    entry_low  = entry,
-    entry_high = entry,
+    entry_low  = ENTRY_LOW,
+    entry_high = ENTRY_HIGH,
     sl         = sl,
-    tps        = [tp1, tp2],
+    tps        = [tp1],
     raw_text   = (
-        f"xauusd buy @{entry}\n"
+        f"xauusd buy @{ENTRY_HIGH}-{ENTRY_LOW}\n"
         f"sl {sl}\n"
         f"tp {tp1}\n"
-        f"tp {tp2}\n"
         f"[TEST SIGNAL — layered DCA UAT]"
     ),
 )
 
-# ── 3. Register in pending + MySQL ────────────────────────────────────────────
+# ── 4. Register in pending + MySQL ────────────────────────────────────────────
 pending[signal_id] = signal
 upsert_signal(signal_id, signal, status="pending")
 
@@ -109,7 +120,7 @@ print("Press Ctrl+C to stop (open positions stay alive in MT5).")
 print()
 
 
-# ── 4. Run watch_layered_entry ────────────────────────────────────────────────
+# ── 5. Run watch_layered_entry ────────────────────────────────────────────────
 async def main():
     async with Bot(token=BOT_TOKEN) as bot:
         await watch_layered_entry(signal, signal_id, bot)

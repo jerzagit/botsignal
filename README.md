@@ -162,23 +162,15 @@ You'll receive **"SignalBot is LIVE!"** on Telegram confirming it's running.
 
 ## Switching between DEMO and LIVE
 
-In `.env`, comment/uncomment the account block:
+Change **one line** in `.env`:
 
 ```env
-# ── DEMO ──────────────────────────────────────────────
-MT5_LOGIN=1067995
-MT5_PASSWORD=...
-MT5_SERVER=VTMarkets-Demo
-MT5_SYMBOL_SUFFIX=-VIP
-
-# ── LIVE ──────────────────────────────────────────────
-#MT5_LOGIN=26656038
-#MT5_PASSWORD=...
-#MT5_SERVER=VTMarkets-Live 5
-#MT5_SYMBOL_SUFFIX=-STD
+ENV_MODE=demo    # UAT testing
+ENV_MODE=live    # real money
 ```
 
-Restart `bot.py` after switching.
+Restart `bot.py`. Log into the matching account in MT5 terminal first.
+Both sets of credentials stay in `.env` — no commenting/uncommenting needed.
 
 ---
 

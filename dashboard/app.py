@@ -22,7 +22,7 @@ from core.config import (
     MIN_MARGIN_LEVEL, MAX_SPREAD_PIPS, MIN_RR_RATIO,
     ENTRY_MAX_DISTANCE_PIPS, BLOCK_SAME_DIRECTION_STACK,
     SL_MIN_PIPS, TP_ENFORCE_PIPS, RISK_PERCENT, MIN_LOT, MAX_LOT,
-    MT5_SYMBOL_SUFFIX, SL_PIP_SIZE,
+    MT5_SYMBOL_SUFFIX, SL_PIP_SIZE, ENV_MODE,
 )
 from dashboard.poller import start_poller
 
@@ -177,6 +177,7 @@ def api_signals():
 def api_guards_config():
     """Return guard thresholds from .env so the dashboard can display them."""
     return jsonify({
+        "env_mode":  ENV_MODE,
         "margin":    {"threshold": f"≥ {MIN_MARGIN_LEVEL:.0f}%",    "enabled": True},
         "stack":     {"threshold": "Block same-direction stack",     "enabled": BLOCK_SAME_DIRECTION_STACK},
         "rr_ratio":  {"threshold": f"≥ {MIN_RR_RATIO:.1f}:1",       "enabled": True},

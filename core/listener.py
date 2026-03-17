@@ -73,11 +73,14 @@ async def start_listener():
         return
 
     # Send live startup confirmation
+    from core.config import ENV_MODE
+    env_label = "🔴 LIVE" if ENV_MODE == "live" else "🟢 DEMO (UAT)"
     me = await client.get_me()
     await bot.send_message(
         chat_id=YOUR_CHAT_ID,
         text=(
             f"🤖 *SignalBot is LIVE!*\n\n"
+            f"⚙️ Environment: *{env_label}*\n"
             f"👤 Logged in as: `{me.first_name}`\n"
             f"📢 Watching: *{getattr(group_entity, 'title', getattr(group_entity, 'username', '?'))}*\n"
             f"🎯 Mode: Auto-execute when price enters zone\n\n"

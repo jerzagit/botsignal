@@ -46,23 +46,16 @@
 
 ## Switching Between DEMO and LIVE
 
-In `.env`, comment out one block and uncomment the other:
+Change **one line** in `.env`:
 
 ```env
-# ── DEMO account (safe for testing) ───────────────────
-#MT5_LOGIN=1067995
-#MT5_PASSWORD=9A7RXn!U
-#MT5_SERVER=VTMarkets-Demo
-#MT5_SYMBOL_SUFFIX=-VIP
-
-# ── LIVE account (real money — be careful!) ───────────
-MT5_LOGIN=26656038
-MT5_PASSWORD=...
-MT5_SERVER=VTMarkets-Live 5
-MT5_SYMBOL_SUFFIX=-STD
+ENV_MODE=demo    # UAT testing
+ENV_MODE=live    # real money
 ```
 
-Restart `bot.py` after switching. Log into the matching account in MT5 terminal first.
+Restart `bot.py`. Log into the matching account in MT5 terminal first.
+Both sets of credentials stay in `.env` — no commenting/uncommenting needed.
+Spread guard auto-adjusts: 5 pips for demo, 3 pips for live.
 
 ---
 
@@ -76,12 +69,17 @@ BOT_TOKEN=...                  # from @BotFather
 YOUR_CHAT_ID=516045412         # from @userinfobot
 SIGNAL_GROUP=-1002083967629    # PIPS FIGHTER 2026 numeric ID
 
+# ── Environment Mode ──────────────────────────────────
+ENV_MODE=demo                  # demo or live — switches everything below
+
 # ── MT5 Account ───────────────────────────────────────
 MT5_PATH=C:\Program Files\VT Markets (Pty) MT5 Terminal\terminal64.exe
-MT5_SYMBOL_SUFFIX=-STD         # live=-STD | demo=-VIP
-MT5_LOGIN=26656038
-MT5_PASSWORD=...
-MT5_SERVER=VTMarkets-Live 5    # exact name — note: space not hyphen
+DEMO_MT5_LOGIN=1068498
+DEMO_MT5_SERVER=VTMarkets-Demo
+DEMO_MT5_SYMBOL_SUFFIX=-VIP
+LIVE_MT5_LOGIN=26656038
+LIVE_MT5_SERVER=VTMarkets-Live 5
+LIVE_MT5_SYMBOL_SUFFIX=-STD
 
 # ── Risk Management ───────────────────────────────────
 RISK_PERCENT=0.10              # 10% of free margin per trade

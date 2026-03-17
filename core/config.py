@@ -19,12 +19,16 @@ YOUR_CHAT_ID    = int(os.getenv("YOUR_CHAT_ID", "0"))
 # ── Mentor's signal group ──────────────────────────────────────────────────────
 SIGNAL_GROUP    = os.getenv("SIGNAL_GROUP", "AssistByHafizCarat")
 
-# ── MT5 account ───────────────────────────────────────────────────────────────
+# ── Environment mode ──────────────────────────────────────────────────────────
+ENV_MODE = os.getenv("ENV_MODE", "demo").lower()
+_P = "LIVE_" if ENV_MODE == "live" else "DEMO_"
+
+# ── MT5 account (selected by ENV_MODE) ───────────────────────────────────────
 MT5_PATH          = os.getenv("MT5_PATH", "")
-MT5_SYMBOL_SUFFIX = os.getenv("MT5_SYMBOL_SUFFIX", "")
-MT5_LOGIN       = int(os.getenv("MT5_LOGIN", "0"))
-MT5_PASSWORD    = os.getenv("MT5_PASSWORD", "")
-MT5_SERVER      = os.getenv("MT5_SERVER", "")
+MT5_LOGIN         = int(os.getenv(_P + "MT5_LOGIN", os.getenv("MT5_LOGIN", "0")))
+MT5_PASSWORD      = os.getenv(_P + "MT5_PASSWORD", os.getenv("MT5_PASSWORD", ""))
+MT5_SERVER        = os.getenv(_P + "MT5_SERVER", os.getenv("MT5_SERVER", ""))
+MT5_SYMBOL_SUFFIX = os.getenv(_P + "MT5_SYMBOL_SUFFIX", os.getenv("MT5_SYMBOL_SUFFIX", ""))
 
 # ── Risk management ───────────────────────────────────────────────────────────
 # % of FREE MARGIN to risk per trade (e.g. 0.05 = 5%)
@@ -59,10 +63,11 @@ ENTRY_MAX_DISTANCE_PIPS = int(os.getenv("ENTRY_MAX_DISTANCE_PIPS", "50"))
 # Professional floor: 300%. Below 200% = margin call danger zone.
 MIN_MARGIN_LEVEL = float(os.getenv("MIN_MARGIN_LEVEL", "300"))
 
-# ── Spread guard ───────────────────────────────────────────────────────────────
+# ── Spread guard (env-specific default) ────────────────────────────────────────
 # Max allowed broker spread in pips before entry is blocked.
 # XAUUSD normal: 1–2 pips. Wide spread (news/off-hours) eats into your SL.
-MAX_SPREAD_PIPS = float(os.getenv("MAX_SPREAD_PIPS", "3.0"))
+MAX_SPREAD_PIPS = float(os.getenv(_P + "MAX_SPREAD_PIPS",
+                        os.getenv("MAX_SPREAD_PIPS", "3.0")))
 
 # ── Reward:Risk ratio guard ────────────────────────────────────────────────────
 # Minimum TP1:SL ratio required to allow the trade.

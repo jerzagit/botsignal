@@ -17,7 +17,7 @@ load_dotenv()
 from core.listener  import start_listener
 from core.notifier  import start_notifier, get_bot
 from core.mt5       import mt5_connect_test
-from core.config    import YOUR_CHAT_ID
+from core.config    import YOUR_CHAT_ID, ENV_MODE
 
 logging.basicConfig(
     level=logging.INFO,
@@ -68,7 +68,8 @@ def release_lock():
 
 
 async def main():
-    log.info("=== SignalBot starting ===")
+    env_label = "LIVE" if ENV_MODE == "live" else "DEMO (UAT)"
+    log.info(f"=== SignalBot starting === Environment: {env_label}")
 
     # Quick MT5 sanity check on startup
     ok, msg = mt5_connect_test()

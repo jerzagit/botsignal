@@ -240,7 +240,8 @@ class TestSpreadGuard(unittest.TestCase):
         """Spread = 4 pips (0.4 pts) → above 3 pip max → blocked."""
         account = _account(margin_level=2000.0, margin=500.0, free_margin=9500.0)
         wide_tick = self._tick_with_spread(0.40)   # 4 pips
-        with _apply_patches(_mock_mt5_ok(account, tick_override=wide_tick)):
+        with _apply_patches(_mock_mt5_ok(account, tick_override=wide_tick)), \
+             patch("core.mt5.MAX_SPREAD_PIPS", 3.0):
             result = execute_trade(make_signal(), "sp_01")
         self.assertIn("spread too wide", result)
         print(f"\n[SPREAD BLOCKED] {result.splitlines()[0]}")
@@ -258,7 +259,8 @@ class TestSpreadGuard(unittest.TestCase):
         """Spread = 3.1 pips → just over threshold → blocked."""
         account = _account(margin_level=2000.0, margin=500.0, free_margin=9500.0)
         over_tick = self._tick_with_spread(0.31)   # 3.1 pips
-        with _apply_patches(_mock_mt5_ok(account, tick_override=over_tick)):
+        with _apply_patches(_mock_mt5_ok(account, tick_override=over_tick)), \
+             patch("core.mt5.MAX_SPREAD_PIPS", 3.0):
             result = execute_trade(make_signal(), "sp_03")
         self.assertIn("spread too wide", result)
         print(f"\n[SPREAD 3.1 BLK] {result.splitlines()[0]}")

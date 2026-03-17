@@ -140,11 +140,17 @@ notepad .env
 Fill in all values. Key ones for VPS:
 
 ```env
+ENV_MODE=live          # demo or live — switches MT5 account + spread limit
+
 MT5_PATH=C:\Program Files\VT Markets (Pty) MT5 Terminal\terminal64.exe
-MT5_LOGIN=26656038
-MT5_PASSWORD=your_password
-MT5_SERVER=VTMarkets-Live 5
-MT5_SYMBOL_SUFFIX=-STD
+DEMO_MT5_LOGIN=1068498
+DEMO_MT5_PASSWORD=your_demo_password
+DEMO_MT5_SERVER=VTMarkets-Demo
+DEMO_MT5_SYMBOL_SUFFIX=-VIP
+LIVE_MT5_LOGIN=26656038
+LIVE_MT5_PASSWORD=your_live_password
+LIVE_MT5_SERVER=VTMarkets-Live 5
+LIVE_MT5_SYMBOL_SUFFIX=-STD
 
 DB_HOST=localhost
 DB_PORT=3307

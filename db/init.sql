@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS trades (
     profit      DECIMAL(10,2),
     closed_at   DATETIME,
     created_at  DATETIME       DEFAULT CURRENT_TIMESTAMP,
+    entry_mode  VARCHAR(12)    DEFAULT NULL,  -- 'layered_dca' | 'direct' | NULL=old data
+    layer_num   TINYINT        DEFAULT NULL,  -- 1,2,3... for DCA layers; NULL for direct
     FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
         ON DELETE SET NULL
 );
