@@ -105,6 +105,7 @@ MAP_ENABLED=true               # enable/disable AutoZone
 LAYER_MODE=false               # true = DCA layers | false = TRADE_SPLIT
 LAYER_COUNT=7                  # max layers (actual count auto-scales with margin)
 LAYER2_PIPS=35                 # pip gap between each layer (L1→L2=35p, L2→L3=70p, etc.)
+MAX_SUB_SPLITS=4               # max sub-orders per layer (auto-reduces for small accounts)
 
 # ── Trade Split (used when LAYER_MODE=false) ──────────
 # Split each signal into N equal positions for partial TP management
@@ -190,17 +191,18 @@ When all upper sub-orders TP → all deepest sub-orders move to breakeven (free 
 
 **TP splitting in layered mode:**
 
-Each layer's lot is split across signal TPs — one sub-order per TP:
+Each layer's lot is dynamically split into up to `MAX_SUB_SPLITS` (default 4) sub-orders, cycling through Hafiz's TPs:
 
 ```
-Signal with 2 TPs, L1 lot = 0.12:
-  Sub-order 1: 0.06 lot → TP1 (secure profit early)
-  Sub-order 2: 0.06 lot → TP2 (ride for more)
-
-Same split applies to L2, L3, etc.
+Signal with 2 TPs, L1 lot = 0.11 (MAX_SUB_SPLITS=4):
+  Sub-order 1: 0.03 lot → TP1
+  Sub-order 2: 0.03 lot → TP2
+  Sub-order 3: 0.03 lot → TP1
+  Sub-order 4: 0.03 lot → TP2
 ```
 
-If `sub_lot < MIN_LOT`, the split count is automatically reduced.
+Split count auto-scales with margin:
+  $1000 → 4 splits | $500 → 4 | $200 → 3 | $100 → 1
 
 **Profit Lock + TP split interaction:**
 - Sub-orders with short TPs (< 50p from entry) close at TP naturally — Profit Lock never fires

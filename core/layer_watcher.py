@@ -33,7 +33,7 @@ import MetaTrader5 as mt5
 from core.config import (
     YOUR_CHAT_ID, SIGNAL_EXPIRY, WATCH_INTERVAL_SECS,
     MT5_SYMBOL_SUFFIX, SL_PIP_SIZE, ENTRY_MAX_DISTANCE_PIPS,
-    LAYER_COUNT, LAYER2_PIPS, MIN_LOT,
+    LAYER_COUNT, LAYER2_PIPS, MIN_LOT, MAX_SUB_SPLITS,
     SL_MIN_PIPS, TP_ENFORCE_PIPS,
 )
 from core.mt5   import mt5_connect, execute_trade, set_breakeven
@@ -220,12 +220,10 @@ async def watch_layered_entry(signal, signal_id: str, bot,
 
     lot_per_layer = max(MIN_LOT, round(total_lot / actual_layers, 2))
 
-    # ── TP splitting: split each layer's lot across signal TPs ─────────────
-    num_tps  = len(effective_tps) if effective_tps else 1
-    tp_split = num_tps
-    # Reduce split count if sub_lot would fall below MIN_LOT
-    while tp_split > 1 and round(lot_per_layer / tp_split, 2) < MIN_LOT:
-        tp_split -= 1
+    # ── Dynamic sub-splitting: split each layer into up to MAX_SUB_SPLITS ──
+    # Auto-scales with margin: $200→2-3 splits, $500→4, $1000+→4 (capped)
+    max_affordable = max(1, int(lot_per_layer / MIN_LOT))
+    tp_split = min(max_affordable, MAX_SUB_SPLITS)
     sub_lot = max(MIN_LOT, round(lot_per_layer / tp_split, 2))
 
     session = LayerSession(

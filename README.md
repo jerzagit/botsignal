@@ -212,6 +212,7 @@ MAP_ENABLED=true               # enable/disable AutoZone
 LAYER_MODE=false               # true = DCA layers | false = TRADE_SPLIT
 LAYER_COUNT=7                  # max layers (actual count is dynamic)
 LAYER2_PIPS=35                 # pip gap between each layer
+MAX_SUB_SPLITS=4               # max sub-orders per layer (auto-reduces for small accounts)
 
 # ── Trade split (used when LAYER_MODE=false) ──────────
 TRADE_SPLIT=5                  # split each signal into N equal positions
@@ -293,15 +294,24 @@ For sell signals, pips are added (higher price = better sell entry).
 
 ### TP splitting
 
-Each layer's lot is split across signal TPs — one sub-order per TP:
+Each layer's lot is dynamically split into multiple sub-orders (up to `MAX_SUB_SPLITS`, default 4). The bot calculates how many splits the account can afford:
+
+```
+tp_split = min(int(lot_per_layer / MIN_LOT), MAX_SUB_SPLITS)
+sub_lot  = lot_per_layer / tp_split
+```
+
+Sub-orders cycle through Hafiz's TPs:
 
 ```
 Signal: SELL @5023-5026, SL 5029, TP1 5018, TP2 5016
-L1 lot = 0.12 → 0.06 at TP1 (5018) + 0.06 at TP2 (5016)
-L2 lot = 0.12 → 0.06 at TP1 (5018) + 0.06 at TP2 (5016)
+$1000 account: L1 lot=0.11 → 4 × 0.03 (TP1, TP2, TP1, TP2)
+$500  account: L1 lot=0.06 → 4 × 0.02 (TP1, TP2, TP1, TP2)
+$200  account: L1 lot=0.03 → 3 × 0.01 (TP1, TP2, TP1)
+$100  account: L1 lot=0.01 → 1 × 0.01 (TP1 only)
 ```
 
-If `sub_lot < MIN_LOT`, the split count is automatically reduced (e.g., 2 TPs but lot too small → 1 order with TP1 only).
+More splits = more granular profit-taking. Small accounts auto-reduce.
 
 ### Profit Lock interaction
 
@@ -520,7 +530,7 @@ TRADE_SPLIT=5, lot=0.01  →  1 × 0.01 lot  (can't split below MIN_LOT)
 TRADE_SPLIT=5, lot=0.05  →  5 × 0.01 lot  ✅
 ```
 
-> When `LAYER_MODE=true`, TRADE_SPLIT is ignored — each layer is split by signal TPs instead (one sub-order per TP).
+> When `LAYER_MODE=true`, TRADE_SPLIT is ignored — each layer is dynamically split into up to `MAX_SUB_SPLITS` sub-orders, cycling through signal TPs.
 
 ---
 
@@ -536,7 +546,7 @@ lot_size     = round to broker volume step
 
 Standard mode:  split_lot = lot_size / actual_splits
 Layered mode:   layer_lot = lot_size / actual_layers  (dynamic)
-                sub_lot   = layer_lot / num_TPs       (TP splitting)
+                sub_lot   = layer_lot / tp_split      (dynamic, up to MAX_SUB_SPLITS)
 ```
 
 If SL hits on all positions, max loss = `RISK_PERCENT` × free margin.
