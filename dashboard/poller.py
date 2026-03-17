@@ -40,33 +40,49 @@ def check_ticket(ticket: int):
     """
     Look up a ticket in MT5 deal history.
     A closed position has an OUT deal (entry == DEAL_ENTRY_OUT).
+
+    MT5 demo accounts reuse position IDs across sessions, so we must:
+    1. First check if the position is still open — if so, skip entirely.
+    2. Only match the LAST (most recent) OUT deal with our magic number.
     """
+    # If position is still open in MT5, it's not closed — skip
+    open_pos = mt5.positions_get(ticket=ticket)
+    if open_pos:
+        return  # Still open — no need to check history
+
     date_from = datetime.now(timezone.utc) - timedelta(days=90)
     date_to   = datetime.now(timezone.utc) + timedelta(days=1)
 
     deals = mt5.history_deals_get(date_from, date_to, position=ticket)
     if not deals:
-        return  # Still open
+        return
 
-    for deal in deals:
-        if deal.entry == mt5.DEAL_ENTRY_OUT:
-            profit      = deal.profit
-            outcome     = "win" if profit >= 0 else "loss"
-            close_price = deal.price
-            closed_at   = datetime.fromtimestamp(deal.time, tz=timezone.utc)
+    # Find the LAST OUT deal with our magic (most recent close of this ticket)
+    last_out = None
+    for deal in reversed(deals):
+        if deal.entry == mt5.DEAL_ENTRY_OUT and deal.magic == 20250101:
+            last_out = deal
+            break
 
-            update_trade_outcome(
-                ticket=ticket,
-                outcome=outcome,
-                close_price=close_price,
-                closed_at=closed_at,
-                profit=profit,
-            )
-            log.info(
-                f"Poller: ticket={ticket} closed → {outcome} "
-                f"@ {close_price}  profit={profit:.2f}"
-            )
-            return
+    if last_out is None:
+        return
+
+    profit      = last_out.profit
+    outcome     = "win" if profit >= 0 else "loss"
+    close_price = last_out.price
+    closed_at   = datetime.fromtimestamp(last_out.time, tz=timezone.utc)
+
+    update_trade_outcome(
+        ticket=ticket,
+        outcome=outcome,
+        close_price=close_price,
+        closed_at=closed_at,
+        profit=profit,
+    )
+    log.info(
+        f"Poller: ticket={ticket} closed → {outcome} "
+        f"@ {close_price}  profit={profit:.2f}"
+    )
 
 
 def get_known_tickets() -> set:
