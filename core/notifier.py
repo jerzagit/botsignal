@@ -5,19 +5,27 @@ Also handles the button taps and routes to MT5 execution.
 """
 
 import time
+import uuid
 import asyncio
 import logging
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
-from core.config import BOT_TOKEN, YOUR_CHAT_ID, SIGNAL_EXPIRY, MAP_ENABLED
+from core.config import (
+    BOT_TOKEN, YOUR_CHAT_ID, SIGNAL_EXPIRY, MAP_ENABLED,
+    BREAKEVEN_KEEP_COUNT, LAYER_MODE, LAYER_COUNT, LAYER2_PIPS,
+    ENTRY_MAX_DISTANCE_PIPS, WATCH_INTERVAL_SECS, SL_PIP_SIZE,
+    MANUAL_SL_PIPS, MANUAL_TP1_PIPS, MANUAL_TP2_PIPS, MANUAL_SYMBOL,
+    MT5_SYMBOL_SUFFIX,
+)
 from core.signal import Signal
 from core.state  import pending, pending_closes
 from core.mt5    import execute_trade, close_position, set_breakeven, get_open_signal_groups
-from core.config import BREAKEVEN_KEEP_COUNT
+from core.layer_watcher import watch_layered_entry
+from core.watcher import watch_and_execute
 from core.db     import (
-    set_snr_levels, get_snr_levels, add_zone, get_today_zones,
+    upsert_signal, set_snr_levels, get_snr_levels, add_zone, get_today_zones,
     delete_zone, clear_zones,
 )
 
@@ -345,8 +353,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("⚠️ Signal already handled or expired.")
         return
 
-    from core.db import upsert_signal, record_trade
-
     if time.time() - signal.created_at > SIGNAL_EXPIRY:
         await query.edit_message_text(
             f"⏰ *Signal expired* — not safe to execute now.\n"
@@ -539,6 +545,92 @@ async def cmd_clearmap(update: Update, context: ContextTypes.DEFAULT_TYPE):
     log.info("/clearmap executed")
 
 
+# ── Manual trade commands ──────────────────────────────────────────────────────
+
+async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /buynow — instant buy at current market price with fixed SL/TP pips.
+    /sellnow — instant sell at current market price with fixed SL/TP pips.
+    Uses same DCA pipeline as Hafiz signals (all guards, layers, sub-splits).
+    """
+    command = update.message.text.split()[0].lstrip("/").lower()  # "buynow" or "sellnow"
+    direction = "buy" if "buy" in command else "sell"
+
+    # Get current market price from MT5
+    import MetaTrader5 as mt5
+    from core.mt5 import mt5_connect
+
+    if not mt5_connect():
+        await update.message.reply_text("MT5 not connected. Start MT5 and try again.")
+        return
+
+    symbol_mt5 = MANUAL_SYMBOL + MT5_SYMBOL_SUFFIX
+    tick = mt5.symbol_info_tick(symbol_mt5)
+    mt5.shutdown()
+
+    if tick is None:
+        await update.message.reply_text(f"Could not get price for {symbol_mt5}.")
+        return
+
+    price = tick.ask if direction == "buy" else tick.bid
+    price = round(price, 2)
+
+    # Calculate SL and TPs from fixed pip distances
+    sl_dist  = MANUAL_SL_PIPS  * SL_PIP_SIZE
+    tp1_dist = MANUAL_TP1_PIPS * SL_PIP_SIZE
+    tp2_dist = MANUAL_TP2_PIPS * SL_PIP_SIZE
+
+    if direction == "buy":
+        sl  = round(price - sl_dist, 2)
+        tp1 = round(price + tp1_dist, 2)
+        tp2 = round(price + tp2_dist, 2)
+    else:
+        sl  = round(price + sl_dist, 2)
+        tp1 = round(price - tp1_dist, 2)
+        tp2 = round(price - tp2_dist, 2)
+
+    # Build Signal object (same as Hafiz signal)
+    signal = Signal(
+        symbol=MANUAL_SYMBOL,
+        direction=direction,
+        entry_low=price,
+        entry_high=price,
+        sl=sl,
+        tps=[tp1, tp2],
+        raw_text=f"/{command} {MANUAL_SYMBOL} {direction} @{price} sl {sl} tp {tp1} tp {tp2}",
+    )
+
+    signal_id = uuid.uuid4().hex[:8]
+    pending[signal_id] = signal
+    upsert_signal(signal_id, signal, status="pending")
+
+    # Build watching notification
+    direction_emoji = "\U0001f7e2 BUY" if direction == "buy" else "\U0001f534 SELL"
+    tps_str = f"`{tp1}` | `{tp2}`"
+
+    if LAYER_MODE:
+        mode_line = (
+            f"\U0001f522 DCA mode - up to `{LAYER_COUNT}` layers "
+            f"(`{LAYER2_PIPS}p` apart)"
+        )
+        watcher_task = watch_layered_entry(signal, signal_id, get_bot(), entry_mode="manual")
+    else:
+        mode_line = "\U0001f3af Single entry mode"
+        watcher_task = watch_and_execute(signal, signal_id, get_bot())
+
+    await update.message.reply_text(
+        f"\U0001f3ae *Manual Trade*\n\n"
+        f"*{MANUAL_SYMBOL}* {direction_emoji} @ `{price}`\n"
+        f"SL: `{sl}` ({MANUAL_SL_PIPS}p) | TP: {tps_str}\n\n"
+        f"{mode_line}\n"
+        f"_All guards active - same pipeline as Hafiz signals_",
+        parse_mode="Markdown"
+    )
+
+    asyncio.create_task(watcher_task)
+    log.info(f"/{command}: {MANUAL_SYMBOL} {direction} @ {price} SL={sl} TP1={tp1} TP2={tp2} [{signal_id}]")
+
+
 # ── Start notifier ─────────────────────────────────────────────────────────────
 
 async def start_notifier():
@@ -550,6 +642,8 @@ async def start_notifier():
     _app.add_handler(CommandHandler("zones", cmd_zones))
     _app.add_handler(CommandHandler("delzone", cmd_delzone))
     _app.add_handler(CommandHandler("clearmap", cmd_clearmap))
+    _app.add_handler(CommandHandler("buynow", cmd_trade_now))
+    _app.add_handler(CommandHandler("sellnow", cmd_trade_now))
     await _app.initialize()
     await _app.start()
     await _app.updater.start_polling()

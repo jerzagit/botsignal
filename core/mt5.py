@@ -70,7 +70,8 @@ def execute_trade(signal: Signal, signal_id: str = None,
                   tp_override: float = None,
                   skip_proximity: bool = False,
                   entry_mode: str = None,
-                  layer_num: int = None) -> str:
+                  layer_num: int = None,
+                  skip_rr_check: bool = False) -> str:
     """
     Place a market order on MT5 for the given signal.
 
@@ -161,7 +162,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
 
     tp_distance = abs(effective_tps[0] - signal.entry_mid) if effective_tps else 0
     rr_ratio    = tp_distance / sl_distance if sl_distance > 0 else 0
-    if rr_ratio < MIN_RR_RATIO:
+    if not skip_rr_check and rr_ratio < MIN_RR_RATIO:
         sl_pips = sl_distance / SL_PIP_SIZE
         tp_pips = tp_distance / SL_PIP_SIZE
         _fire_guard("rr_ratio", signal, signal_id,

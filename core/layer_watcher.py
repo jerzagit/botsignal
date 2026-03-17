@@ -219,7 +219,13 @@ async def watch_layered_entry(signal, signal_id: str, bot,
         await _notify(bot, f"❌ LayerWatcher [{signal_id}]: MT5 connect failed at startup")
         return
 
-    total_lot, lot_explanation = calculate_lot(signal)
+    # Manual trades use separate risk allocation (MANUAL_RISK_PERCENT)
+    risk_override = None
+    if entry_mode == "manual":
+        from core.config import MANUAL_RISK_PERCENT
+        risk_override = MANUAL_RISK_PERCENT
+
+    total_lot, lot_explanation = calculate_lot(signal, risk_override=risk_override)
     effective_tps = _adjusted_tps(signal)
     mt5.shutdown()
 
@@ -438,6 +444,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                     tp_val  = _tp_for_sub_order(tp_idx, session.tp_split, effective_tps)
                     all_own = own_tix + layer_tickets   # include already-placed sub-orders
 
+                    _skip_rr = (entry_mode == "manual")
                     result = await asyncio.get_event_loop().run_in_executor(
                         None,
                         execute_trade,
@@ -449,6 +456,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                         next_idx > 0,       # skip_proximity for L2+
                         entry_mode,         # entry_mode ('layered_dca' or 'mapped')
                         layer_num,          # layer_num
+                        _skip_rr,           # skip_rr_check for manual trades
                     )
 
                     if "Trade Executed" in result:

@@ -116,6 +116,13 @@ LAYER_COUNT   = int(os.getenv("LAYER_COUNT",  "7"))    # max layers (dynamic flo
 LAYER2_PIPS    = int(os.getenv("LAYER2_PIPS",     "35"))  # pips between each layer
 MAX_SUB_SPLITS = int(os.getenv("MAX_SUB_SPLITS", "4"))   # max sub-orders per layer (auto-reduces for small accounts)
 
+# ── Manual trade (/buynow, /sellnow) ────────────────────────────────────────
+MANUAL_SL_PIPS      = int(os.getenv("MANUAL_SL_PIPS",   "50"))       # SL distance from entry
+MANUAL_TP1_PIPS     = int(os.getenv("MANUAL_TP1_PIPS",  "50"))      # TP1 distance from entry
+MANUAL_TP2_PIPS     = int(os.getenv("MANUAL_TP2_PIPS",  "80"))      # TP2 distance from entry
+MANUAL_SYMBOL       = os.getenv("MANUAL_SYMBOL", "XAUUSD").upper()  # default symbol
+MANUAL_RISK_PERCENT = float(os.getenv("MANUAL_RISK_PERCENT", "0.10"))  # separate 10% risk
+
 # ── Trading agent schedule (Malaysia time = UTC+8) ────────────────────────────
 # Agent runs between these hours MY time (e.g. 22:00 – 06:00 covers London+NY)
 AGENT_START_HOUR_MY = int(os.getenv("AGENT_START_HOUR_MY", "22"))  # 10 PM

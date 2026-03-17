@@ -23,9 +23,12 @@ from core.signal import Signal
 log = logging.getLogger(__name__)
 
 
-def calculate_lot(signal: Signal) -> tuple[float, str]:
+def calculate_lot(signal: Signal, risk_override: float = None) -> tuple[float, str]:
     """
     Calculate lot size for a signal based on current free margin.
+
+    Args:
+        risk_override: use this risk % instead of RISK_PERCENT (e.g. for manual trades)
 
     Returns:
         (lot_size, explanation_string)
@@ -53,7 +56,8 @@ def calculate_lot(signal: Signal) -> tuple[float, str]:
         return 0.0, f"❌ Could not get tick info for {signal.symbol}."
 
     # ── Calculate risk amount ─────────────────────────────────────────────────
-    risk_amount = free_margin * RISK_PERCENT
+    risk_pct    = risk_override if risk_override is not None else RISK_PERCENT
+    risk_amount = free_margin * risk_pct
 
     # ── SL distance in price units and pips ──────────────────────────────────
     entry_ref   = signal.entry_mid
@@ -101,7 +105,7 @@ def calculate_lot(signal: Signal) -> tuple[float, str]:
     explanation = (
         f"{warning_str}"
         f"💰 Free margin: `${free_margin:,.2f}`\n"
-        f"📊 Risk: `{RISK_PERCENT*100:.0f}%` → `${risk_amount:,.2f}`\n"
+        f"📊 Risk: `{risk_pct*100:.0f}%` -> `${risk_amount:,.2f}`\n"
         f"📏 SL: `{sl_pips:.0f} pips` ({sl_distance:.2f} pts)\n"
         f"📦 Lot: `{lot}`"
     )
