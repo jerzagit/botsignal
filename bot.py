@@ -4,10 +4,15 @@ Starts Telethon listener + Telegram bot confirmation system.
 Run: python bot.py
 """
 
+import os
 import asyncio
 import logging
-import os
 import sys
+
+# Fix Windows cp1252 encoding crash on emoji/unicode in logs
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 import subprocess
 from pathlib import Path
 from dotenv import load_dotenv
@@ -18,7 +23,7 @@ from core.listener     import start_listener
 from core.notifier     import start_notifier, get_bot
 from core.map_watcher  import start_map_watcher
 from core.mt5          import mt5_connect_test
-from core.config       import YOUR_CHAT_ID, ENV_MODE, MAP_ENABLED
+from core.config       import YOUR_CHAT_ID, ENV_MODE, MAP_ENABLED, TREND_ENABLED
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,6 +95,18 @@ async def main():
 
         tasks.append(_delayed_map_watcher())
         log.info("AutoZone enabled — watcher will start after notifier init")
+
+    if TREND_ENABLED:
+        from core.trend_analyzer import start_trend_watcher
+
+        async def _delayed_trend_watcher():
+            """Wait briefly for notifier to initialize, then start trend watcher."""
+            await asyncio.sleep(3)
+            bot = get_bot()
+            await start_trend_watcher(bot)
+
+        tasks.append(_delayed_trend_watcher())
+        log.info("Trend analyzer enabled — watcher will start after notifier init")
 
     await asyncio.gather(*tasks)
 

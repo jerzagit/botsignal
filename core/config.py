@@ -123,6 +123,13 @@ MANUAL_TP2_PIPS     = int(os.getenv("MANUAL_TP2_PIPS",  "80"))      # TP2 distan
 MANUAL_SYMBOL       = os.getenv("MANUAL_SYMBOL", "XAUUSD").upper()  # default symbol
 MANUAL_RISK_PERCENT = float(os.getenv("MANUAL_RISK_PERCENT", "0.10"))  # separate 10% risk
 
+# ── Trend analyzer (/trend + auto-alerts) ───────────────────────────────────
+TREND_ENABLED    = os.getenv("TREND_ENABLED", "true").lower() == "true"
+TREND_INTERVAL   = int(os.getenv("TREND_INTERVAL", "60"))          # seconds between checks
+TREND_EMA_SHORT  = int(os.getenv("TREND_EMA_SHORT", "9"))          # fast EMA period
+TREND_EMA_LONG   = int(os.getenv("TREND_EMA_LONG", "21"))          # slow EMA period
+TREND_RSI_PERIOD = int(os.getenv("TREND_RSI_PERIOD", "14"))        # RSI period
+
 # ── Trading agent schedule (Malaysia time = UTC+8) ────────────────────────────
 # Agent runs between these hours MY time (e.g. 22:00 – 06:00 covers London+NY)
 AGENT_START_HOUR_MY = int(os.getenv("AGENT_START_HOUR_MY", "22"))  # 10 PM

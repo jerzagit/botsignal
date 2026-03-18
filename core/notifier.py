@@ -17,7 +17,7 @@ from core.config import (
     BREAKEVEN_KEEP_COUNT, LAYER_MODE, LAYER_COUNT, LAYER2_PIPS,
     ENTRY_MAX_DISTANCE_PIPS, WATCH_INTERVAL_SECS, SL_PIP_SIZE,
     MANUAL_SL_PIPS, MANUAL_TP1_PIPS, MANUAL_TP2_PIPS, MANUAL_SYMBOL,
-    MT5_SYMBOL_SUFFIX,
+    MT5_SYMBOL_SUFFIX, TREND_ENABLED,
 )
 from core.signal import Signal
 from core.state  import pending, pending_closes
@@ -79,8 +79,8 @@ async def send_confirmation(bot: Bot, signal: Signal, signal_id: str):
 async def send_close_confirmation(bot, alert):
     """
     Route to the right confirmation flow based on alert reason:
-      - setup_failed → show groups, CLOSE per group or CLOSE ALL
-      - early_tp     → breakeven plan: keep top N, close rest of profitable, leave losses
+      - setup_failed -> show groups, CLOSE per group or CLOSE ALL
+      - early_tp     -> breakeven plan: keep top N, close rest of profitable, leave losses
     """
     groups = get_open_signal_groups(symbol=alert.symbol)
 
@@ -168,7 +168,7 @@ async def _send_collect_profit_plan(bot, alert, groups):
     n          = len(profitable)
     keep_count = max(1, round(n * 0.3))   # 30% keep at breakeven (min 1)
     to_close   = profitable[:-keep_count] if keep_count < n else []
-    keep_be    = profitable[-keep_count:]  # least profitable of the winners → breakeven
+    keep_be    = profitable[-keep_count:]  # least profitable of the winners -> breakeven
 
     lines = [f"💰 *Collect Profit Plan* — {alert.symbol or 'all'}\n",
              f"_70% secure · 30% breakeven_\n"]
@@ -234,7 +234,7 @@ async def _send_early_tp_plan(bot, alert, groups):
     lines = [f"⚡ *Early Profit Plan* — {alert.symbol or 'all'}\n"]
 
     if keep_be:
-        lines.append(f"🔒 *KEEP at breakeven* (SL → entry):")
+        lines.append(f"🔒 *KEEP at breakeven* (SL -> entry):")
         for p in keep_be:
             pnl_str = f"+${p.profit:.2f}"
             lines.append(f"  #{p.ticket} | {p.symbol} | P&L: `{pnl_str}` | Entry: `{p.price_open}`")
@@ -631,6 +631,27 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     log.info(f"/{command}: {MANUAL_SYMBOL} {direction} @ {price} SL={sl} TP1={tp1} TP2={tp2} [{signal_id}]")
 
 
+# ── Trend command ─────────────────────────────────────────────────────────────
+
+async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/trend — show market direction across M5, M15, H1, H4."""
+    from core.trend_analyzer import analyze_all_timeframes, format_trend_table
+
+    await update.message.reply_text("Analyzing market direction...")
+
+    results = await asyncio.get_event_loop().run_in_executor(
+        None, analyze_all_timeframes, None
+    )
+
+    if not results:
+        await update.message.reply_text("Could not connect to MT5. Start MT5 and try again.")
+        return
+
+    table = format_trend_table(results)
+    await update.message.reply_text(table, parse_mode="Markdown")
+    log.info("/trend command executed")
+
+
 # ── Start notifier ─────────────────────────────────────────────────────────────
 
 async def start_notifier():
@@ -644,6 +665,8 @@ async def start_notifier():
     _app.add_handler(CommandHandler("clearmap", cmd_clearmap))
     _app.add_handler(CommandHandler("buynow", cmd_trade_now))
     _app.add_handler(CommandHandler("sellnow", cmd_trade_now))
+    if TREND_ENABLED:
+        _app.add_handler(CommandHandler("trend", cmd_trend))
     await _app.initialize()
     await _app.start()
     await _app.updater.start_polling()
