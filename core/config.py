@@ -116,12 +116,29 @@ LAYER_COUNT   = int(os.getenv("LAYER_COUNT",  "7"))    # max layers (dynamic flo
 LAYER2_PIPS    = int(os.getenv("LAYER2_PIPS",     "35"))  # pips between each layer
 MAX_SUB_SPLITS = int(os.getenv("MAX_SUB_SPLITS", "4"))   # max sub-orders per layer (auto-reduces for small accounts)
 
+# ── Dynamic L2 gap + runway guard ────────────────────────────────────────────
+# When L2_GAP_RATIO > 0, layer gap = sl_pips × ratio (replaces fixed LAYER2_PIPS)
+# e.g. 50p SL × 0.40 = 20p gap → L2 has 30p runway to SL
+# Set to 0 to fall back to fixed LAYER2_PIPS.
+L2_GAP_RATIO       = float(os.getenv("L2_GAP_RATIO", "0.40"))
+# Minimum runway (pips) between a layer trigger and SL. Skip layer if below this.
+L2_MIN_RUNWAY_PIPS = int(os.getenv("L2_MIN_RUNWAY_PIPS", "25"))
+
 # ── Manual trade (/buynow, /sellnow) ────────────────────────────────────────
 MANUAL_SL_PIPS      = int(os.getenv("MANUAL_SL_PIPS",   "50"))       # SL distance from entry
 MANUAL_TP1_PIPS     = int(os.getenv("MANUAL_TP1_PIPS",  "50"))      # TP1 distance from entry
 MANUAL_TP2_PIPS     = int(os.getenv("MANUAL_TP2_PIPS",  "80"))      # TP2 distance from entry
 MANUAL_SYMBOL       = os.getenv("MANUAL_SYMBOL", "XAUUSD").upper()  # default symbol
 MANUAL_RISK_PERCENT = float(os.getenv("MANUAL_RISK_PERCENT", "0.10"))  # separate 10% risk
+
+# ── Fib retracement guard (manual trades) ──────────────────────────────────
+# Block/warn if price is outside the 0–38.2% pullback zone of the last opposite H1 candle
+FIB_GUARD_ENABLED   = os.getenv("FIB_GUARD_ENABLED", "true").lower() == "true"
+FIB_MAX_RETRACEMENT = float(os.getenv("FIB_MAX_RETRACEMENT", "0.382"))   # 38.2%
+
+# ── Fib entry scanner (auto-alerts when price enters pullback zone) ───────
+FIB_SCANNER_ENABLED  = os.getenv("FIB_SCANNER_ENABLED", "true").lower() == "true"
+FIB_SCANNER_INTERVAL = int(os.getenv("FIB_SCANNER_INTERVAL", "60"))      # seconds
 
 # ── Trend analyzer (/trend + auto-alerts) ───────────────────────────────────
 TREND_ENABLED    = os.getenv("TREND_ENABLED", "true").lower() == "true"

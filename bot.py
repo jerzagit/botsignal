@@ -23,7 +23,7 @@ from core.listener     import start_listener
 from core.notifier     import start_notifier, get_bot
 from core.map_watcher  import start_map_watcher
 from core.mt5          import mt5_connect_test
-from core.config       import YOUR_CHAT_ID, ENV_MODE, MAP_ENABLED, TREND_ENABLED
+from core.config       import YOUR_CHAT_ID, ENV_MODE, MAP_ENABLED, TREND_ENABLED, FIB_SCANNER_ENABLED
 
 logging.basicConfig(
     level=logging.INFO,
@@ -107,6 +107,18 @@ async def main():
 
         tasks.append(_delayed_trend_watcher())
         log.info("Trend analyzer enabled — watcher will start after notifier init")
+
+    if FIB_SCANNER_ENABLED:
+        from core.trend_analyzer import start_fib_scanner
+
+        async def _delayed_fib_scanner():
+            """Wait briefly for notifier to initialize, then start Fib scanner."""
+            await asyncio.sleep(3)
+            bot = get_bot()
+            await start_fib_scanner(bot)
+
+        tasks.append(_delayed_fib_scanner())
+        log.info("Fib entry scanner enabled — will start after notifier init")
 
     await asyncio.gather(*tasks)
 

@@ -80,7 +80,7 @@ def check_ticket(ticket: int):
         profit=profit,
     )
     log.info(
-        f"Poller: ticket={ticket} closed → {outcome} "
+        f"Poller: ticket={ticket} closed -> {outcome} "
         f"@ {close_price}  profit={profit:.2f}"
     )
 
@@ -189,7 +189,7 @@ def check_profit_lock():
         if result.retcode == mt5.TRADE_RETCODE_DONE:
             log.info(
                 f"ProfitLock: #{pos.ticket} {pos.symbol} {direction} "
-                f"+{profit_pips:.0f}p → SL={new_sl} TP={new_tp}"
+                f"+{profit_pips:.0f}p -> SL={new_sl} TP={new_tp}"
             )
         else:
             log.warning(

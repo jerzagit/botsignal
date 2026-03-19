@@ -4,12 +4,12 @@ Price watcher — monitors price after a signal arrives and auto-executes
 when price enters Hafiz's entry zone.
 
 Flow:
-  1. Signal detected → watcher task starts
+  1. Signal detected -> watcher task starts
   2. Every WATCH_INTERVAL_SECS: check current price vs entry zone
-  3. Price within ENTRY_MAX_DISTANCE_PIPS → run all guards → execute
-  4. Spread too wide → retry next cycle (spread normalises)
-  5. Any other guard blocks → notify user, stop watching
-  6. SIGNAL_EXPIRY reached → notify expired, stop watching
+  3. Price within ENTRY_MAX_DISTANCE_PIPS -> run all guards -> execute
+  4. Spread too wide -> retry next cycle (spread normalises)
+  5. Any other guard blocks -> notify user, stop watching
+  6. SIGNAL_EXPIRY reached -> notify expired, stop watching
 """
 
 import asyncio

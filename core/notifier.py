@@ -17,7 +17,8 @@ from core.config import (
     BREAKEVEN_KEEP_COUNT, LAYER_MODE, LAYER_COUNT, LAYER2_PIPS,
     ENTRY_MAX_DISTANCE_PIPS, WATCH_INTERVAL_SECS, SL_PIP_SIZE,
     MANUAL_SL_PIPS, MANUAL_TP1_PIPS, MANUAL_TP2_PIPS, MANUAL_SYMBOL,
-    MT5_SYMBOL_SUFFIX, TREND_ENABLED,
+    MT5_SYMBOL_SUFFIX, TREND_ENABLED, FIB_GUARD_ENABLED, FIB_SCANNER_ENABLED,
+    MANUAL_RISK_PERCENT,
 )
 from core.signal import Signal
 from core.state  import pending, pending_closes
@@ -344,6 +345,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_close_callback(query, context)
         return
 
+    # Route manual trade trend confirmation callbacks
+    if query.data.startswith("manual_"):
+        await handle_manual_trade_callback(query, context)
+        return
+
+    # Route Fib entry alert callbacks
+    if query.data.startswith("fibalert_"):
+        await handle_fib_alert_callback(query, context)
+        return
+
     await query.answer()
 
     action, signal_id = query.data.split("_", 1)
@@ -552,6 +563,7 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     /buynow — instant buy at current market price with fixed SL/TP pips.
     /sellnow — instant sell at current market price with fixed SL/TP pips.
     Uses same DCA pipeline as Hafiz signals (all guards, layers, sub-splits).
+    Checks H1+H4 trend before executing — warns if opposing direction.
     """
     command = update.message.text.split()[0].lstrip("/").lower()  # "buynow" or "sellnow"
     direction = "buy" if "buy" in command else "sell"
@@ -604,31 +616,322 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pending[signal_id] = signal
     upsert_signal(signal_id, signal, status="pending")
 
-    # Build watching notification
     direction_emoji = "\U0001f7e2 BUY" if direction == "buy" else "\U0001f534 SELL"
     tps_str = f"`{tp1}` | `{tp2}`"
+
+    # ── Trend check (H1 + H4) ────────────────────────────────────────────────
+    trend_line = ""
+    trend_opposed = False
+    if TREND_ENABLED:
+        from core.trend_analyzer import check_trend_alignment
+        trend = await asyncio.get_event_loop().run_in_executor(
+            None, check_trend_alignment, direction, MANUAL_SYMBOL
+        )
+        h1_mark = "\u2705" if trend["h1"] != ("BEAR" if direction == "buy" else "BULL") else "\u274c"
+        h4_mark = "\u2705" if trend["h4"] != ("BEAR" if direction == "buy" else "BULL") else "\u274c"
+        trend_line = f"H1: `{trend['h1']}` {h1_mark} | H4: `{trend['h4']}` {h4_mark}"
+
+        if not trend["aligned"]:
+            trend_opposed = True
+
+    # ── Fib retracement check (H1) ────────────────────────────────────────────
+    fib_line = ""
+    fib_opposed = False
+    if FIB_GUARD_ENABLED:
+        from core.trend_analyzer import check_fib_entry
+        fib = await asyncio.get_event_loop().run_in_executor(
+            None, check_fib_entry, direction, price, MANUAL_SYMBOL
+        )
+        fib_pct = fib["fib_pct"]
+        if fib["in_zone"]:
+            fib_line = f"Fib: `{fib_pct:.0f}%` \u2705"
+        else:
+            fib_opposed = True
+            fib_line = (
+                f"Fib: `{fib_pct:.0f}%` \u274c (above 38.2%)\n"
+                f"     Last H1: `{fib['candle_high']}`\u2192`{fib['candle_low']}` | "
+                f"38.2% = `{fib['fib_382']}`"
+            )
+
+    # ── If trend OR fib opposes: show warning with CONFIRM / CANCEL ───────────
+    if trend_opposed or fib_opposed:
+        warn_lines = [f"\u26a0\ufe0f *Entry Warning* \u2014 /{command}\n"]
+        if trend_line:
+            label = " \u2014 *opposing*" if trend_opposed else ""
+            warn_lines.append(f"Trend: {trend_line}{label}")
+        if fib_line:
+            warn_lines.append(f"{fib_line}")
+        warn_lines.append(
+            f"\n*{MANUAL_SYMBOL}* {direction_emoji} @ `{price}`\n"
+            f"SL: `{sl}` ({MANUAL_SL_PIPS}p) | TP: {tps_str}\n"
+        )
+        if fib_opposed and not trend_opposed:
+            warn_lines.append("_Price hasn't pulled back enough. Wait for dip?_")
+        elif trend_opposed and not fib_opposed:
+            warn_lines.append("_Trade against trend? This increases risk._")
+        else:
+            warn_lines.append("_Trend opposing + bad pullback level. High risk entry._")
+
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("\u2705 CONFIRM", callback_data=f"manual_exec_{signal_id}"),
+            InlineKeyboardButton("\u274c CANCEL",  callback_data=f"manual_skip_{signal_id}"),
+        ]])
+        await update.message.reply_text(
+            "\n".join(warn_lines),
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
+        reasons = []
+        if trend_opposed:
+            reasons.append(f"trend({trend.get('warning', '')})")
+        if fib_opposed:
+            reasons.append(f"fib({fib.get('warning', '')})")
+        log.info(f"/{command}: {', '.join(reasons)} — waiting for confirmation [{signal_id}]")
+        return
+
+    # ── All checks passed: execute immediately ────────────────────────────────
+    _start_manual_watcher(signal, signal_id, direction_emoji, price, sl, tps_str, trend_line)
+
+    checks = trend_line
+    if fib_line:
+        checks = f"{checks} | {fib_line}" if checks else fib_line
+
+    checks_info = f"\n{checks}" if checks else ""
+    if LAYER_MODE:
+        mode_line = (
+            f"\U0001f522 DCA mode - up to `{LAYER_COUNT}` layers "
+            f"(`{LAYER2_PIPS}p` apart)"
+        )
+    else:
+        mode_line = "\U0001f3af Single entry mode"
+
+    await update.message.reply_text(
+        f"\U0001f3ae *Manual Trade*\n\n"
+        f"*{MANUAL_SYMBOL}* {direction_emoji} @ `{price}`{checks_info}\n"
+        f"SL: `{sl}` ({MANUAL_SL_PIPS}p) | TP: {tps_str}\n\n"
+        f"{mode_line}\n"
+        f"_All guards active - same pipeline as Hafiz signals_",
+        parse_mode="Markdown"
+    )
+    log.info(f"/{command}: {MANUAL_SYMBOL} {direction} @ {price} SL={sl} TP1={tp1} TP2={tp2} [{signal_id}]")
+
+
+def _start_manual_watcher(signal, signal_id, direction_emoji, price, sl, tps_str, trend_line):
+    """Start the watcher task for a manual trade (shared by direct execute and confirm callback)."""
+    if LAYER_MODE:
+        watcher_task = watch_layered_entry(signal, signal_id, get_bot(), entry_mode="manual")
+    else:
+        watcher_task = watch_and_execute(signal, signal_id, get_bot())
+    asyncio.create_task(watcher_task)
+
+
+async def handle_manual_trade_callback(query, context):
+    """Handle CONFIRM / CANCEL taps from trend warning on manual trades."""
+    await query.answer()
+    data = query.data
+
+    action, signal_id = data.split("_", 1)
+    # action is "manual", signal_id starts with "exec_xxx" or "skip_xxx"
+    parts = data.replace("manual_", "").split("_", 1)
+    action = parts[0]   # "exec" or "skip"
+    signal_id = parts[1]
+
+    signal = pending.get(signal_id)
+    if signal is None:
+        await query.edit_message_text("\u26a0\ufe0f Trade already handled or expired.")
+        return
+
+    if action == "exec":
+        # Confirmed — start watcher
+        pending.pop(signal_id, None)
+        pending[signal_id] = signal  # re-add (watcher checks pending)
+
+        direction_emoji = "\U0001f7e2 BUY" if signal.direction == "buy" else "\U0001f534 SELL"
+        price = signal.entry_low
+        tps_str = " | ".join(f"`{t}`" for t in signal.tps)
+
+        _start_manual_watcher(signal, signal_id, direction_emoji, price, signal.sl, tps_str, "")
+
+        if LAYER_MODE:
+            mode_line = (
+                f"\U0001f522 DCA mode - up to `{LAYER_COUNT}` layers "
+                f"(`{LAYER2_PIPS}p` apart)"
+            )
+        else:
+            mode_line = "\U0001f3af Single entry mode"
+
+        await query.edit_message_text(
+            f"\u2705 *Confirmed — executing against trend*\n\n"
+            f"*{MANUAL_SYMBOL}* {direction_emoji} @ `{price}`\n"
+            f"SL: `{signal.sl}` | TP: {tps_str}\n\n"
+            f"{mode_line}\n"
+            f"_All guards active_",
+            parse_mode="Markdown"
+        )
+        log.info(f"Manual trade confirmed against trend [{signal_id}]")
+    else:
+        # Cancelled
+        pending.pop(signal_id, None)
+        upsert_signal(signal_id, signal, status="skipped")
+        await query.edit_message_text(
+            f"\u274c *Trade cancelled*\n"
+            f"`{signal.symbol} {signal.direction.upper()}` — trend was opposing.",
+            parse_mode="Markdown"
+        )
+        log.info(f"Manual trade cancelled (trend opposing) [{signal_id}]")
+
+
+# ── Fib entry alert callback ─────────────────────────────────────────────────
+
+async def handle_fib_alert_callback(query, context):
+    """Handle BUY NOW / SELL NOW / DISMISS from Fib entry scanner alerts."""
+    await query.answer()
+    data = query.data  # e.g. "fibalert_buy_abc12345" or "fibalert_dismiss_abc12345"
+
+    # Parse: fibalert_{action}_{alert_id}
+    rest = data.replace("fibalert_", "")       # "buy_abc12345" or "dismiss_abc12345"
+    action, alert_id = rest.split("_", 1)      # ("buy", "abc12345")
+
+    if action == "dismiss":
+        await query.edit_message_text("\u274c Alert dismissed.")
+        log.info(f"Fib alert dismissed [{alert_id}]")
+        return
+
+    # action is "buy" or "sell" — execute the trade
+    from core.trend_analyzer import fib_pending
+
+    alert_data = fib_pending.pop(alert_id, None)
+    if alert_data is None:
+        await query.edit_message_text("\u26a0\ufe0f Alert expired. Use /buynow or /sellnow instead.")
+        return
+
+    direction = action  # "buy" or "sell"
+
+    # Get fresh price from MT5
+    import MetaTrader5 as mt5_mod
+    from core.mt5 import mt5_connect
+
+    if not mt5_connect():
+        await query.edit_message_text("\u274c MT5 not connected. Start MT5 and try again.")
+        return
+
+    symbol_mt5 = MANUAL_SYMBOL + MT5_SYMBOL_SUFFIX
+    tick = mt5_mod.symbol_info_tick(symbol_mt5)
+    mt5_mod.shutdown()
+
+    if tick is None:
+        await query.edit_message_text(f"\u274c Could not get price for {symbol_mt5}.")
+        return
+
+    price = tick.ask if direction == "buy" else tick.bid
+    price = round(price, 2)
+
+    # Re-validate Fib zone at current price (price may have moved since alert)
+    alert_price = alert_data["price"]
+    price_moved_pips = abs(price - alert_price) / SL_PIP_SIZE
+    if FIB_GUARD_ENABLED:
+        from core.trend_analyzer import check_fib_entry
+        fib = await asyncio.get_event_loop().run_in_executor(
+            None, check_fib_entry, direction, price, MANUAL_SYMBOL
+        )
+        if not fib["in_zone"]:
+            # Price moved out of Fib zone — show warning with CONFIRM/CANCEL
+            signal_id = uuid.uuid4().hex[:8]
+
+            # Build a temporary signal for the pending dict
+            sl_dist_tmp  = MANUAL_SL_PIPS * SL_PIP_SIZE
+            tp1_dist_tmp = MANUAL_TP1_PIPS * SL_PIP_SIZE
+            tp2_dist_tmp = MANUAL_TP2_PIPS * SL_PIP_SIZE
+            if direction == "buy":
+                sl_tmp  = round(price - sl_dist_tmp, 2)
+                tp1_tmp = round(price + tp1_dist_tmp, 2)
+                tp2_tmp = round(price + tp2_dist_tmp, 2)
+            else:
+                sl_tmp  = round(price + sl_dist_tmp, 2)
+                tp1_tmp = round(price - tp1_dist_tmp, 2)
+                tp2_tmp = round(price - tp2_dist_tmp, 2)
+
+            signal_tmp = Signal(
+                symbol=MANUAL_SYMBOL, direction=direction,
+                entry_low=price, entry_high=price, sl=sl_tmp,
+                tps=[tp1_tmp, tp2_tmp],
+                raw_text=f"/fibalert {MANUAL_SYMBOL} {direction} @{price}",
+            )
+            pending[signal_id] = signal_tmp
+            upsert_signal(signal_id, signal_tmp, status="pending")
+
+            dir_emoji = "\U0001f7e2 BUY" if direction == "buy" else "\U0001f534 SELL"
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("\u2705 CONFIRM", callback_data=f"manual_exec_{signal_id}"),
+                InlineKeyboardButton("\u274c CANCEL",  callback_data=f"manual_skip_{signal_id}"),
+            ]])
+            await query.edit_message_text(
+                f"\u26a0\ufe0f *Price moved out of Fib zone*\n\n"
+                f"Alert was @ `{alert_price}` \u2192 now @ `{price}` "
+                f"({price_moved_pips:.0f}p moved)\n"
+                f"Fib: `{fib['fib_pct']:.0f}%` \u274c (above 38.2%)\n\n"
+                f"*{MANUAL_SYMBOL}* {dir_emoji} @ `{price}`\n"
+                f"SL: `{sl_tmp}` ({MANUAL_SL_PIPS}p) | TP: `{tp1_tmp}` | `{tp2_tmp}`\n\n"
+                f"_Price hasn\u2019t pulled back enough anymore. Still enter?_",
+                parse_mode="Markdown",
+                reply_markup=keyboard,
+            )
+            log.info(
+                f"Fib alert: price moved out of zone ({alert_price}->{price}, "
+                f"fib {fib['fib_pct']:.0f}%) — waiting for confirmation [{alert_id}]"
+            )
+            return
+
+    # Build Signal (same as cmd_trade_now)
+    sl_dist  = MANUAL_SL_PIPS  * SL_PIP_SIZE
+    tp1_dist = MANUAL_TP1_PIPS * SL_PIP_SIZE
+    tp2_dist = MANUAL_TP2_PIPS * SL_PIP_SIZE
+
+    if direction == "buy":
+        sl  = round(price - sl_dist, 2)
+        tp1 = round(price + tp1_dist, 2)
+        tp2 = round(price + tp2_dist, 2)
+    else:
+        sl  = round(price + sl_dist, 2)
+        tp1 = round(price - tp1_dist, 2)
+        tp2 = round(price - tp2_dist, 2)
+
+    signal = Signal(
+        symbol=MANUAL_SYMBOL,
+        direction=direction,
+        entry_low=price,
+        entry_high=price,
+        sl=sl,
+        tps=[tp1, tp2],
+        raw_text=f"/fibalert {MANUAL_SYMBOL} {direction} @{price} sl {sl} tp {tp1} tp {tp2}",
+    )
+
+    signal_id = uuid.uuid4().hex[:8]
+    pending[signal_id] = signal
+    upsert_signal(signal_id, signal, status="pending")
+
+    # Start the manual watcher
+    direction_emoji = "\U0001f7e2 BUY" if direction == "buy" else "\U0001f534 SELL"
+    tps_str = f"`{tp1}` | `{tp2}`"
+    _start_manual_watcher(signal, signal_id, direction_emoji, price, sl, tps_str, "")
 
     if LAYER_MODE:
         mode_line = (
             f"\U0001f522 DCA mode - up to `{LAYER_COUNT}` layers "
             f"(`{LAYER2_PIPS}p` apart)"
         )
-        watcher_task = watch_layered_entry(signal, signal_id, get_bot(), entry_mode="manual")
     else:
         mode_line = "\U0001f3af Single entry mode"
-        watcher_task = watch_and_execute(signal, signal_id, get_bot())
 
-    await update.message.reply_text(
-        f"\U0001f3ae *Manual Trade*\n\n"
+    await query.edit_message_text(
+        f"\u2705 *Fib Alert \u2192 Executing*\n\n"
         f"*{MANUAL_SYMBOL}* {direction_emoji} @ `{price}`\n"
         f"SL: `{sl}` ({MANUAL_SL_PIPS}p) | TP: {tps_str}\n\n"
         f"{mode_line}\n"
-        f"_All guards active - same pipeline as Hafiz signals_",
+        f"_All guards active \u2014 same pipeline as manual trades_",
         parse_mode="Markdown"
     )
-
-    asyncio.create_task(watcher_task)
-    log.info(f"/{command}: {MANUAL_SYMBOL} {direction} @ {price} SL={sl} TP1={tp1} TP2={tp2} [{signal_id}]")
+    log.info(f"Fib alert executed: {MANUAL_SYMBOL} {direction} @ {price} [{signal_id}]")
 
 
 # ── Trend command ─────────────────────────────────────────────────────────────

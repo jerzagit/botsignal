@@ -3,25 +3,27 @@ core/layer_watcher.py
 DCA-style layered entry watcher.
 
 Places layers as price dips progressively deeper into/below the entry zone:
-  L1 → price enters zone (standard proximity guard)
-  L2 → price drops LAYER2_PIPS from L1 entry
-  L3 → price drops 2×LAYER2_PIPS from L1 entry
-  LN → price drops (N-1)×LAYER2_PIPS from L1 entry
+  L1 -> price enters zone (standard proximity guard)
+  L2 -> price drops gap_pips from L1 entry (dynamic: sl_pips × L2_GAP_RATIO)
+  L3 -> price drops 2×gap_pips from L1 entry
+  LN -> price drops (N-1)×gap_pips from L1 entry
+
+Runway guard: skip layer if trigger is < L2_MIN_RUNWAY_PIPS from SL.
 
 Layer count is DYNAMIC:
   actual_layers = min(LAYER_COUNT, int(total_lot / MIN_LOT))
-  → $200 account → 3 layers, $500 → 5, $1000+ → 7  (with LAYER_COUNT=7)
+  -> $200 account -> 3 layers, $500 -> 5, $1000+ -> 7  (with LAYER_COUNT=7)
 
 TP splitting (dynamic sub-splitting):
   Each layer is split into up to MAX_SUB_SPLITS sub-orders (default 4).
   tp_split = min(int(lot_per_layer / MIN_LOT), MAX_SUB_SPLITS)
   Sub-orders cycle through signal TPs: TP1, TP2, TP1, TP2
-  Auto-scales: $200→2-3 splits, $500→4, $1000+→4 (capped)
+  Auto-scales: $200->2-3 splits, $500->4, $1000+->4 (capped)
 
 Exit:
-  When all upper layers' sub-orders close at TP → move deepest to breakeven.
-  When deepest also closes → session complete.
-  When all stopped → session ended.
+  When all upper layers' sub-orders close at TP -> move deepest to breakeven.
+  When deepest also closes -> session complete.
+  When all stopped -> session ended.
 """
 
 import asyncio
@@ -35,7 +37,7 @@ from core.config import (
     YOUR_CHAT_ID, SIGNAL_EXPIRY, WATCH_INTERVAL_SECS,
     MT5_SYMBOL_SUFFIX, SL_PIP_SIZE, ENTRY_MAX_DISTANCE_PIPS,
     LAYER_COUNT, LAYER2_PIPS, MIN_LOT, MAX_SUB_SPLITS,
-    SL_MIN_PIPS, TP_ENFORCE_PIPS,
+    SL_MIN_PIPS, TP_ENFORCE_PIPS, L2_GAP_RATIO, L2_MIN_RUNWAY_PIPS,
 )
 from core.mt5   import mt5_connect, execute_trade, set_breakeven
 from core.risk  import calculate_lot
@@ -117,7 +119,7 @@ def _tp_for_layer(idx: int, actual_layers: int, effective_tps: list) -> float:
         return 0.0
     if actual_layers == 1 or idx < actual_layers - 1:
         return effective_tps[idx % len(effective_tps)]
-    return effective_tps[-1]   # deepest → furthest TP (free ride)
+    return effective_tps[-1]   # deepest -> furthest TP (free ride)
 
 
 def _tp_for_sub_order(tp_idx: int, tp_split: int, effective_tps: list) -> float:
@@ -148,14 +150,26 @@ def _tp_for_sub_order(tp_idx: int, tp_split: int, effective_tps: list) -> float:
         return 0.0                                            # Runner (no TP)
 
 
+def _effective_gap_pips(signal) -> int:
+    """
+    Calculate layer gap in pips.
+    If L2_GAP_RATIO > 0: gap = sl_pips × ratio (dynamic, adapts to SL size)
+    Else: fall back to fixed LAYER2_PIPS (legacy).
+    """
+    if L2_GAP_RATIO > 0:
+        sl_pips = abs(signal.entry_mid - signal.sl) / SL_PIP_SIZE
+        return max(1, int(sl_pips * L2_GAP_RATIO))
+    return LAYER2_PIPS
+
+
 def _layer_trigger_price(signal, l1_entry: float, layer_idx: int) -> float:
     """
     Absolute price that should trigger layer N (0-indexed).
     L1 (idx=0) uses proximity guard — no separate trigger.
-    L2 (idx=1): l1_entry ∓ LAYER2_PIPS for buy/sell.
-    LN (idx=N): l1_entry ∓ N×LAYER2_PIPS.
+    L2+: l1_entry ∓ N × gap_pips (dynamic or fixed).
     """
-    pip_dist = layer_idx * LAYER2_PIPS * SL_PIP_SIZE
+    gap_pips = _effective_gap_pips(signal)
+    pip_dist = layer_idx * gap_pips * SL_PIP_SIZE
     return (l1_entry - pip_dist) if signal.direction == "buy" else (l1_entry + pip_dist)
 
 
@@ -198,7 +212,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                               entry_mode: str = "layered_dca"):
     """
     DCA-style layered entry — runs as an asyncio background task.
-    Places N layers as price dips deeper, then monitors for TP → BE.
+    Places N layers as price dips deeper, then monitors for TP -> BE.
     entry_mode: 'layered_dca' (signal-based) or 'mapped' (zone auto-entry).
     """
     symbol   = signal.symbol + MT5_SYMBOL_SUFFIX
@@ -241,22 +255,23 @@ async def watch_layered_entry(signal, signal_id: str, bot,
     # For SELL: L(N) trigger = entry + N×LAYER2_PIPS — must stay < signal.sl
     # Safe condition: N × LAYER2_PIPS < sl_pips  (strict — never touch SL)
     sl_pips_signal = abs(signal.entry_mid - signal.sl) / SL_PIP_SIZE
-    if LAYER2_PIPS > 0 and sl_pips_signal > 0:
+    effective_gap = _effective_gap_pips(signal)
+    if effective_gap > 0 and sl_pips_signal > 0:
         # How many DCA steps fit strictly inside the SL distance?
-        safe_steps    = int((sl_pips_signal - 1) / LAYER2_PIPS)  # -1 pip buffer
-        max_by_sl     = 1 + safe_steps                           # L1 + safe steps
+        safe_steps    = int((sl_pips_signal - 1) / effective_gap)  # -1 pip buffer
+        max_by_sl     = 1 + safe_steps                             # L1 + safe steps
         if actual_layers > max_by_sl:
             log.info(
                 f"LayerWatcher [{signal_id}]: SL cap "
-                f"{actual_layers}→{max_by_sl} layers "
-                f"(SL={sl_pips_signal:.0f}p, step={LAYER2_PIPS}p)"
+                f"{actual_layers}->{max_by_sl} layers "
+                f"(SL={sl_pips_signal:.0f}p, gap={effective_gap}p)"
             )
             actual_layers = max(1, max_by_sl)
 
     lot_per_layer = max(MIN_LOT, round(total_lot / actual_layers, 2))
 
     # ── Dynamic sub-splitting: split each layer into up to MAX_SUB_SPLITS ──
-    # Auto-scales with margin: $200→2-3 splits, $500→4, $1000+→4 (capped)
+    # Auto-scales with margin: $200->2-3 splits, $500->4, $1000+->4 (capped)
     max_affordable = max(1, int(lot_per_layer / MIN_LOT))
     tp_split = min(max_affordable, MAX_SUB_SPLITS)
     sub_lot = max(MIN_LOT, round(lot_per_layer / tp_split, 2))
@@ -278,7 +293,9 @@ async def watch_layered_entry(signal, signal_id: str, bot,
         f"LayerWatcher [{signal_id}]: "
         f"actual_layers={actual_layers} lot_per_layer={lot_per_layer} "
         f"sub_lot={sub_lot} tp_split={tp_split} "
-        f"total_lot={total_lot} layer2_pips={LAYER2_PIPS}"
+        f"total_lot={total_lot} layer_gap={effective_gap}p "
+        f"(ratio={L2_GAP_RATIO}, sl={sl_pips_signal:.0f}p) "
+        f"min_runway={L2_MIN_RUNWAY_PIPS}p"
     )
 
     next_idx = 0   # index of the next layer to place
@@ -315,7 +332,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                 ))
                 return
 
-            # ── MONITORING: all layers placed → check for BE trigger ──────────
+            # ── MONITORING: all layers placed -> check for BE trigger ──────────
             if next_idx >= actual_layers:
                 session.state = "MONITORING"
 
@@ -352,7 +369,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                 if upper_tickets:
                     upper_still_open = [t for t in upper_tickets if t in still_open_set]
                     if not upper_still_open:
-                        # All upper layers closed at TP → move ALL deepest sub-tickets to BE
+                        # All upper layers closed at TP -> move ALL deepest sub-tickets to BE
                         be_results = []
                         for dt in deepest_open:
                             be_result = await asyncio.get_event_loop().run_in_executor(
@@ -363,7 +380,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                         session.state = "DONE"
                         be_text = "\n".join(be_results)
                         await _notify(bot, (
-                            f"🔒 *L1–L{deepest_idx} TP secured → L{deepest_idx+1} free ride!*\n"
+                            f"🔒 *L1–L{deepest_idx} TP secured -> L{deepest_idx+1} free ride!*\n"
                             f"`{signal.symbol} {signal.direction.upper()}`\n"
                             f"{len(deepest_open)} position(s) moved to breakeven ♻️\n"
                             f"_{be_text}_"
@@ -376,7 +393,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
         # ── Layer placement phase ─────────────────────────────────────────────
         if next_idx < actual_layers:
 
-            # Hard deadline check: no entry at all → expired
+            # Hard deadline check: no entry at all -> expired
             if time.time() >= deadline and next_idx == 0:
                 pending.pop(signal_id, None)
                 upsert_signal(signal_id, signal, status="expired")
@@ -425,6 +442,25 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                         await asyncio.sleep(WATCH_INTERVAL_SECS)
                         continue
 
+                    # ── Runway guard: skip if trigger too close to SL ──
+                    runway_pips = abs(trigger - signal.sl) / SL_PIP_SIZE
+                    if runway_pips < L2_MIN_RUNWAY_PIPS:
+                        log.info(
+                            f"LayerWatcher [{signal_id}]: L{next_idx+1} runway "
+                            f"{runway_pips:.0f}p < min {L2_MIN_RUNWAY_PIPS}p — "
+                            f"skipping (trigger={trigger:.2f}, SL={signal.sl})"
+                        )
+                        session.tickets[next_idx] = []   # mark slot as skipped
+                        next_idx += 1
+                        await _notify(bot, (
+                            f"⏭️ *L{layer_num}/{actual_layers} skipped — "
+                            f"runway too short ({runway_pips:.0f}p < {L2_MIN_RUNWAY_PIPS}p)*\n"
+                            f"`{signal.symbol} {signal.direction.upper()}`\n"
+                            f"_Trigger {trigger:.2f} only {runway_pips:.0f}p from SL {signal.sl}_"
+                        ))
+                        await asyncio.sleep(WATCH_INTERVAL_SECS)
+                        continue
+
                     should_place = (
                         price <= trigger if signal.direction == "buy"
                         else price >= trigger
@@ -452,7 +488,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                         signal_id,
                         session.sub_lot,    # lot_override (sub-lot)
                         all_own,            # own_tickets (exempt from stack guard)
-                        tp_val,             # tp_override → single-order mode
+                        tp_val,             # tp_override -> single-order mode
                         next_idx > 0,       # skip_proximity for L2+
                         entry_mode,         # entry_mode ('layered_dca' or 'mapped')
                         layer_num,          # layer_num
@@ -489,9 +525,11 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                         nxt_trigger = _layer_trigger_price(
                             signal, session.entries[0], next_idx
                         )
+                        gap_display = int(abs(nxt_trigger - session.entries[0]) / SL_PIP_SIZE)
+                        nxt_runway = abs(nxt_trigger - signal.sl) / SL_PIP_SIZE
                         next_msg = (
                             f"\n📍 L{next_idx+1} triggers @ `{nxt_trigger:.2f}` "
-                            f"({LAYER2_PIPS}p deeper)"
+                            f"({gap_display}p deeper, {nxt_runway:.0f}p runway)"
                         )
                     else:
                         next_msg = "\n🎯 All layers active — monitoring TPs"

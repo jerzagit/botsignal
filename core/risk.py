@@ -112,7 +112,7 @@ def calculate_lot(signal: Signal, risk_override: float = None) -> tuple[float, s
 
     log.info(
         f"Lot calc | margin={free_margin:.2f} risk={risk_amount:.2f} "
-        f"sl={sl_pips:.0f}pips risk/lot={risk_per_lot:.2f} raw={raw_lot:.4f} → lot={lot}"
+        f"sl={sl_pips:.0f}pips risk/lot={risk_per_lot:.2f} raw={raw_lot:.4f} -> lot={lot}"
     )
 
     return lot, explanation

@@ -116,7 +116,7 @@ async def start_listener():
 
         signal_id = uuid.uuid4().hex[:8]
         pending[signal_id] = signal
-        log.info(f"Signal detected: {signal.symbol} {signal.direction.upper()} → {signal_id}")
+        log.info(f"Signal detected: {signal.symbol} {signal.direction.upper()} -> {signal_id}")
 
         from core.db import upsert_signal
         upsert_signal(signal_id, signal, status="pending")

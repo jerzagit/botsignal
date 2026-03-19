@@ -277,7 +277,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
 
     # ── Split lot into TRADE_SPLIT equal positions ────────────────────────────
     # Cap splits so total risk never exceeds the calculated lot.
-    # e.g. lot=0.01, TRADE_SPLIT=5 → only 1 split (can't split below MIN_LOT)
+    # e.g. lot=0.01, TRADE_SPLIT=5 ->only 1 split (can't split below MIN_LOT)
     vol_step      = info.volume_step
     actual_splits = max(1, min(TRADE_SPLIT, int(lot / MIN_LOT)))
     split_lot     = round(round(lot / actual_splits / vol_step) * vol_step, 2)
@@ -324,9 +324,9 @@ def execute_trade(signal: Signal, signal_id: str = None,
         if signal_id:
             record_trade(signal_id, ticket, split_lot, price, entry_mode, layer_num)
 
-    tps_str  = " → ".join(str(t) for t in signal.tps)
+    tps_str  = " ->".join(str(t) for t in signal.tps)
     tick_lines = "\n".join(
-        f"  `#{t}` → TP `{tp_val}`" for t, tp_val in tickets
+        f"  `#{t}` ->TP `{tp_val}`" for t, tp_val in tickets
     )
     failed_str = ("\n⚠️ *Failed:* " + ", ".join(failed)) if failed else ""
 
@@ -361,7 +361,7 @@ def close_position(ticket: int) -> str:
         mt5.shutdown()
         return f"❌ Could not get price for {pos.symbol}."
 
-    # To close: BUY position → sell; SELL position → buy
+    # To close: BUY position ->sell; SELL position ->buy
     order_type = mt5.ORDER_TYPE_SELL if pos.type == 0 else mt5.ORDER_TYPE_BUY
     price      = tick.bid if pos.type == 0 else tick.ask
 
@@ -420,7 +420,7 @@ def set_breakeven(ticket: int) -> str:
         return f"❌ Breakeven failed #{ticket}: `{result.comment}`"
 
     direction = "BUY" if pos.type == 0 else "SELL"
-    return f"🔒 Breakeven set — `{pos.symbol} {direction}` #{ticket} SL → `{entry}`"
+    return f"🔒 Breakeven set — `{pos.symbol} {direction}` #{ticket} SL ->`{entry}`"
 
 
 def modify_sl_tp(ticket: int, new_sl: float = None, new_tp: float = None) -> str:
@@ -449,7 +449,7 @@ def modify_sl_tp(ticket: int, new_sl: float = None, new_tp: float = None) -> str
         return f"❌ Modify failed #{ticket}: {result.comment}"
 
     direction = "BUY" if pos.type == 0 else "SELL"
-    return f"✅ Modified {pos.symbol} {direction} #{ticket} SL→{request['sl']} TP→{request['tp']}"
+    return f"✅ Modified {pos.symbol} {direction} #{ticket} SL->{request['sl']} TP->{request['tp']}"
 
 
 def get_open_signal_groups(symbol: str = None) -> list:
@@ -478,12 +478,12 @@ def get_open_signal_groups(symbol: str = None) -> list:
     if not all_positions:
         return []
 
-    # Build ticket → position map
+    # Build ticket ->position map
     ticket_map = {p.ticket: p for p in all_positions}
     open_tickets = list(ticket_map.keys())
 
     # Look up these tickets in MySQL to get signal groupings
-    groups = {}   # signal_id → {signal_info, positions[]}
+    groups = {}   # signal_id ->{signal_info, positions[]}
 
     try:
         from core.db import get_conn
