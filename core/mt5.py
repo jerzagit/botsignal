@@ -243,6 +243,25 @@ def execute_trade(signal: Signal, signal_id: str = None,
 
     direction_emoji = "🔴" if signal.direction == "sell" else "🟢"
 
+    # ── Manual trade: re-anchor SL/TP to actual fill price ───────────────────
+    # /buynow and /sellnow fix SL/TP at command time. If price moves before the
+    # 30-sec watcher fires, SL can end up on the wrong side → MT5 rejects it.
+    # Re-anchor using the same pip distance, relative to actual execution price.
+    actual_sl = signal.sl
+    actual_tp_override = tp_override
+    if entry_mode == "manual" and signal.entry_mid:
+        sl_pts = abs(signal.entry_mid - signal.sl)
+        if signal.direction == "sell":
+            actual_sl = round(price + sl_pts, 2)
+            if tp_override and tp_override != 0.0:
+                tp_pts = abs(signal.entry_mid - tp_override)
+                actual_tp_override = round(price - tp_pts, 2)
+        else:
+            actual_sl = round(price - sl_pts, 2)
+            if tp_override and tp_override != 0.0:
+                tp_pts = abs(tp_override - signal.entry_mid)
+                actual_tp_override = round(price + tp_pts, 2)
+
     # ── Single-order mode (used by layer watcher — tp_override provided) ─────
     if tp_override is not None:
         req = {
@@ -251,8 +270,8 @@ def execute_trade(signal: Signal, signal_id: str = None,
             "volume":       lot,
             "type":         order_type,
             "price":        price,
-            "sl":           signal.sl,
-            "tp":           tp_override,
+            "sl":           actual_sl,
+            "tp":           actual_tp_override,
             "deviation":    20,
             "magic":        20250101,
             "comment":      "SignalBot Layer",
@@ -270,7 +289,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
         return (
             f"✅ *Trade Executed!*\n\n"
             f"{direction_emoji} `{symbol} {signal.direction.upper()}`\n"
-            f"Entry: `{price}` | SL: `{signal.sl}` | TP: `{tp_override}`\n"
+            f"Entry: `{price}` | SL: `{actual_sl}` | TP: `{actual_tp_override}`\n"
             f"Lot: `{lot}` | Ticket: `#{r.order}`"
             f"{tp_override_note}"
         )
@@ -289,13 +308,19 @@ def execute_trade(signal: Signal, signal_id: str = None,
     for i in range(actual_splits):
         # Assign TPs across splits — use effective_tps (may be auto-adjusted)
         split_tp = effective_tps[i % len(effective_tps)] if effective_tps else tp
+        # For manual trades, re-anchor TP to actual fill price
+        if entry_mode == "manual" and signal.entry_mid and split_tp:
+            tp_pts = abs(split_tp - signal.entry_mid)
+            split_tp = round(
+                price + tp_pts if signal.direction == "buy" else price - tp_pts, 2
+            )
         req = {
             "action":       mt5.TRADE_ACTION_DEAL,
             "symbol":       symbol,
             "volume":       split_lot,
             "type":         order_type,
             "price":        price,
-            "sl":           signal.sl,
+            "sl":           actual_sl,
             "tp":           split_tp,
             "deviation":    20,
             "magic":        20250101,
