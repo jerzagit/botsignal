@@ -24,8 +24,10 @@ from core.config import (
     SL_MIN_PIPS, TP_ENFORCE_PIPS, RISK_PERCENT, MIN_LOT, MAX_LOT,
     MT5_SYMBOL_SUFFIX, SL_PIP_SIZE, ENV_MODE, MAP_ENABLED,
     PROFIT_LOCK_ENABLED, PROFIT_LOCK_PIPS, PROFIT_LOCK_TP_PIPS,
+    TRAIL_ENABLED, TRAIL_PIPS,
+    SESSION_FILTER_ENABLED, SESSION_START_HOUR_UTC, SESSION_END_HOUR_UTC,
     LAYER_MODE, LAYER_COUNT, LAYER2_PIPS, MAX_SUB_SPLITS,
-    L2_GAP_RATIO, L2_MIN_RUNWAY_PIPS,
+    L2_GAP_RATIO, L2_MIN_RUNWAY_PIPS, L1_LOT_RATIO,
     FIB_GUARD_ENABLED, FIB_MAX_RETRACEMENT,
     FIB_SCANNER_ENABLED, FIB_SCANNER_INTERVAL,
     TREND_ENABLED, TREND_INTERVAL,
@@ -185,8 +187,18 @@ def api_signals():
 @app.route("/api/guards/config")
 def api_guards_config():
     """Return guard thresholds from .env so the dashboard can display them."""
+    # Session hours in MYT (UTC+8) for display
+    start_myt = (SESSION_START_HOUR_UTC + 8) % 24
+    end_myt   = (SESSION_END_HOUR_UTC   + 8) % 24
+
     return jsonify({
         "env_mode":  ENV_MODE,
+        "session_filter": {
+            "enabled":    SESSION_FILTER_ENABLED,
+            "start_utc":  SESSION_START_HOUR_UTC,
+            "end_utc":    SESSION_END_HOUR_UTC,
+            "threshold":  f"{'ON' if SESSION_FILTER_ENABLED else 'OFF'} · {SESSION_START_HOUR_UTC:02d}:00–{SESSION_END_HOUR_UTC:02d}:00 UTC ({start_myt:02d}:00–{end_myt:02d}:00 MYT)",
+        },
         "margin":    {"threshold": f"≥ {MIN_MARGIN_LEVEL:.0f}%",    "enabled": True},
         "stack":     {"threshold": "Block same-direction stack",     "enabled": BLOCK_SAME_DIRECTION_STACK},
         "rr_ratio":  {"threshold": f"≥ {MIN_RR_RATIO:.1f}:1",       "enabled": True},
@@ -197,7 +209,12 @@ def api_guards_config():
         "auto_tp":   {"threshold": f"SL < {SL_MIN_PIPS}p => TP set to {TP_ENFORCE_PIPS}p"},
         "profit_lock": {
             "threshold": f"+{PROFIT_LOCK_PIPS}p → BE + TP {PROFIT_LOCK_TP_PIPS}p",
-            "enabled": PROFIT_LOCK_ENABLED,
+            "enabled":   PROFIT_LOCK_ENABLED,
+        },
+        "trail": {
+            "enabled":   TRAIL_ENABLED,
+            "pips":      TRAIL_PIPS,
+            "threshold": f"{'ON' if TRAIL_ENABLED else 'OFF'} · Trail SL every {TRAIL_PIPS}p",
         },
         "dca": {
             "enabled":        LAYER_MODE,
@@ -205,14 +222,15 @@ def api_guards_config():
             "layer_gap_pips": LAYER2_PIPS,
             "max_sub_splits": MAX_SUB_SPLITS,
             "min_lot":        MIN_LOT,
-            "threshold":      f"{'ON' if LAYER_MODE else 'OFF'} · {LAYER_COUNT} layers · {MAX_SUB_SPLITS} splits",
+            "l1_lot_ratio":   L1_LOT_RATIO,
+            "threshold":      f"{'ON' if LAYER_MODE else 'OFF'} · {LAYER_COUNT} layers · L1={int(L1_LOT_RATIO*100)}% / L2+={int((1-L1_LOT_RATIO)*100)}% · {MAX_SUB_SPLITS} splits",
         },
         "dynamic_gap": {
-            "enabled":      L2_GAP_RATIO > 0,
-            "gap_ratio":    L2_GAP_RATIO,
-            "min_runway":   L2_MIN_RUNWAY_PIPS,
+            "enabled":       L2_GAP_RATIO > 0,
+            "gap_ratio":     L2_GAP_RATIO,
+            "min_runway":    L2_MIN_RUNWAY_PIPS,
             "fallback_pips": LAYER2_PIPS,
-            "threshold":    f"Gap = SL × {L2_GAP_RATIO} | Runway ≥ {L2_MIN_RUNWAY_PIPS}p" if L2_GAP_RATIO > 0 else f"Fixed {LAYER2_PIPS}p gap",
+            "threshold":     f"Gap = SL × {L2_GAP_RATIO} | Runway ≥ {L2_MIN_RUNWAY_PIPS}p" if L2_GAP_RATIO > 0 else f"Fixed {LAYER2_PIPS}p gap",
         },
         "trend": {
             "enabled":    TREND_ENABLED,
@@ -271,21 +289,33 @@ def api_guards_live():
         dca_estimate = None
         if acc and LAYER_MODE:
             free = acc.margin_free
-            # Rough lot estimate: (free × risk%) / (50 SL × $10 pip_value)
             est_total_lot = round(free * RISK_PERCENT / (50 * 10), 2)
             if est_total_lot >= MIN_LOT:
-                est_layers = min(LAYER_COUNT, max(1, int(est_total_lot / MIN_LOT)))
-                est_lot_per_layer = round(est_total_lot / est_layers, 2)
-                est_affordable = max(1, int(est_lot_per_layer / MIN_LOT))
-                est_splits = min(est_affordable, MAX_SUB_SPLITS)
-                est_sub_lot = max(MIN_LOT, round(est_lot_per_layer / est_splits, 2))
+                # SL cap: 50p SL, gap = 50×0.40 = 20p → safe_steps = int(49/20) = 2 → max 3 layers
+                sl_pips_est  = 50
+                gap_est      = max(1, int(sl_pips_est * L2_GAP_RATIO))
+                safe_steps   = int((sl_pips_est - 1) / gap_est)
+                est_layers   = max(1, min(LAYER_COUNT, min(int(est_total_lot / MIN_LOT), 1 + safe_steps)))
+                # Weighted L1/L2+ split
+                if est_layers == 1:
+                    l1_lot = est_total_lot
+                    ln_lot = est_total_lot
+                else:
+                    l1_lot = max(MIN_LOT, round(est_total_lot * L1_LOT_RATIO, 2))
+                    ln_lot = max(MIN_LOT, round((est_total_lot - l1_lot) / (est_layers - 1), 2))
+                # Sub-splits per layer
+                l1_splits = min(max(1, int(l1_lot / MIN_LOT)), MAX_SUB_SPLITS)
+                ln_splits = min(max(1, int(ln_lot / MIN_LOT)), MAX_SUB_SPLITS)
                 dca_estimate = {
                     "total_lot":     est_total_lot,
                     "layers":        est_layers,
-                    "lot_per_layer": est_lot_per_layer,
-                    "splits":        est_splits,
-                    "sub_lot":       est_sub_lot,
-                    "total_orders":  est_layers * est_splits,
+                    "l1_lot":        l1_lot,
+                    "ln_lot":        ln_lot,
+                    "l1_splits":     l1_splits,
+                    "ln_splits":     ln_splits,
+                    "splits":        l1_splits,   # kept for legacy display
+                    "sub_lot":       max(MIN_LOT, round(l1_lot / l1_splits, 2)),
+                    "total_orders":  l1_splits + (est_layers - 1) * ln_splits if est_layers > 1 else l1_splits,
                 }
 
         return jsonify({
