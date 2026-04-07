@@ -653,50 +653,36 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"38.2% = `{fib['fib_382']}`"
             )
 
-    # ── If trend OR fib opposes: show warning with CONFIRM / CANCEL ───────────
+    # ── Build warning lines (shown but never blocks execution) ──────────────
+    warn_lines = []
     if trend_opposed or fib_opposed:
-        warn_lines = [f"\u26a0\ufe0f *Entry Warning* \u2014 /{command}\n"]
+        warn_lines.append(f"\u26a0\ufe0f *Entry Warning*")
         if trend_line:
             label = " \u2014 *opposing*" if trend_opposed else ""
             warn_lines.append(f"Trend: {trend_line}{label}")
         if fib_line:
-            warn_lines.append(f"{fib_line}")
-        warn_lines.append(
-            f"\n*{MANUAL_SYMBOL}* {direction_emoji} @ `{price}`\n"
-            f"SL: `{sl}` ({MANUAL_SL_PIPS}p) | TP: {tps_str}\n"
-        )
+            warn_lines.append(fib_line)
         if fib_opposed and not trend_opposed:
-            warn_lines.append("_Price hasn't pulled back enough. Wait for dip?_")
+            warn_lines.append("_Price hasn't pulled back enough._")
         elif trend_opposed and not fib_opposed:
-            warn_lines.append("_Trade against trend? This increases risk._")
+            warn_lines.append("_Trading against trend — higher risk._")
         else:
-            warn_lines.append("_Trend opposing + bad pullback level. High risk entry._")
-
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("\u2705 CONFIRM", callback_data=f"manual_exec_{signal_id}"),
-            InlineKeyboardButton("\u274c CANCEL",  callback_data=f"manual_skip_{signal_id}"),
-        ]])
-        await update.message.reply_text(
-            "\n".join(warn_lines),
-            parse_mode="Markdown",
-            reply_markup=keyboard,
-        )
+            warn_lines.append("_Trend opposing + bad pullback. High risk._")
         reasons = []
         if trend_opposed:
             reasons.append(f"trend({trend.get('warning', '')})")
         if fib_opposed:
             reasons.append(f"fib({fib.get('warning', '')})")
-        log.info(f"/{command}: {', '.join(reasons)} — waiting for confirmation [{signal_id}]")
-        return
+        log.info(f"/{command}: warning — {', '.join(reasons)} [{signal_id}]")
 
-    # ── All checks passed: execute immediately ────────────────────────────────
+    # ── Execute immediately regardless of warnings ────────────────────────────
     _start_manual_watcher(signal, signal_id, direction_emoji, price, sl, tps_str, trend_line)
 
     checks = trend_line
     if fib_line:
         checks = f"{checks} | {fib_line}" if checks else fib_line
-
     checks_info = f"\n{checks}" if checks else ""
+
     if LAYER_MODE:
         mode_line = (
             f"\U0001f522 DCA mode - up to `{LAYER_COUNT}` layers "
@@ -705,12 +691,19 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         mode_line = "\U0001f3af Single entry mode"
 
-    await update.message.reply_text(
-        f"\U0001f3ae *Manual Trade*\n\n"
-        f"*{MANUAL_SYMBOL}* {direction_emoji} @ `{price}`{checks_info}\n"
-        f"SL: `{sl}` ({MANUAL_SL_PIPS}p) | TP: {tps_str}\n\n"
-        f"{mode_line}\n"
+    msg_lines = []
+    if warn_lines:
+        msg_lines += warn_lines + [""]
+    msg_lines += [
+        f"\U0001f3ae *Manual Trade*\n",
+        f"*{MANUAL_SYMBOL}* {direction_emoji} @ `{price}`{checks_info}",
+        f"SL: `{sl}` ({MANUAL_SL_PIPS}p) | TP: {tps_str}\n",
+        mode_line,
         f"_All guards active - same pipeline as Hafiz signals_",
+    ]
+
+    await update.message.reply_text(
+        "\n".join(msg_lines),
         parse_mode="Markdown"
     )
     log.info(f"/{command}: {MANUAL_SYMBOL} {direction} @ {price} SL={sl} TP1={tp1} TP2={tp2} [{signal_id}]")
