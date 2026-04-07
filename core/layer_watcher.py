@@ -39,6 +39,7 @@ from core.config import (
     LAYER_COUNT, LAYER2_PIPS, MIN_LOT, MAX_SUB_SPLITS,
     SL_MIN_PIPS, TP_ENFORCE_PIPS, L2_GAP_RATIO, L2_MIN_RUNWAY_PIPS,
     L1_LOT_RATIO, PROFIT_LOCK_ENABLED, PROFIT_LOCK_PIPS, PROFIT_LOCK_TP_PIPS,
+    TRAIL_ENABLED, TRAIL_PIPS,
 )
 from core.mt5   import mt5_connect, execute_trade, set_breakeven, modify_sl_tp
 from core.risk  import calculate_lot
@@ -63,6 +64,7 @@ class LayerSession:
     tickets:        list = field(default_factory=list)   # list[list[int]] — sub-tickets per layer
     entries:        list = field(default_factory=list)   # float|None per layer
     locked_tickets: set  = field(default_factory=set)   # tickets already profit-locked
+    trail_prices:   dict = field(default_factory=dict)  # ticket → best price seen (for trailing)
     state:          str  = "WAIT_L1"
 
 
@@ -271,6 +273,11 @@ async def _check_profit_lock(session: "LayerSession", bot) -> None:
             log.warning(f"ProfitLock [{session.signal_id}]: #{ticket} modify failed: {result}")
 
     if locked_this_cycle:
+        for ticket, profit_pips, new_tp in locked_this_cycle:
+            pos = positions.get(ticket)
+            if pos is not None:
+                session.trail_prices[ticket] = pos.price_current
+
         lines = "\n".join(
             f"  `#{t}` — `{p:.0f}p` profit → TP `{tp}`"
             for t, p, tp in locked_this_cycle
@@ -280,6 +287,64 @@ async def _check_profit_lock(session: "LayerSession", bot) -> None:
             f"`{signal.symbol} {signal.direction.upper()}`\n"
             f"{lines}\n"
             f"_SL moved to breakeven | TP tightened to {PROFIT_LOCK_TP_PIPS}p_"
+        ))
+
+
+async def _trail_stops(session: "LayerSession", bot) -> None:
+    """
+    For each locked ticket: if price has moved TRAIL_PIPS further in profit direction
+    since last check, trail the SL to stay TRAIL_PIPS behind current price.
+    Only moves SL in the profitable direction — never backwards.
+    """
+    if not TRAIL_ENABLED or not session.trail_prices:
+        return
+
+    if not mt5_connect():
+        return
+
+    positions = {p.ticket: p for p in (mt5.positions_get() or [])}
+    mt5.shutdown()
+
+    signal    = session.signal
+    trail_pts = TRAIL_PIPS * SL_PIP_SIZE
+    trailed   = []
+
+    for ticket, best_price in list(session.trail_prices.items()):
+        pos = positions.get(ticket)
+        if pos is None:
+            session.trail_prices.pop(ticket, None)
+            continue
+
+        current = pos.price_current
+
+        if signal.direction == "sell":
+            if current < best_price - trail_pts:
+                new_sl = round(current + trail_pts, 2)
+                if new_sl >= pos.sl:   # never move SL backwards
+                    continue
+                result = modify_sl_tp(ticket, new_sl=new_sl)
+                if "❌" not in result:
+                    session.trail_prices[ticket] = current
+                    trailed.append((ticket, new_sl))
+                    log.info(f"Trail [{session.signal_id}]: #{ticket} price={current} → SL={new_sl}")
+        else:
+            if current > best_price + trail_pts:
+                new_sl = round(current - trail_pts, 2)
+                if new_sl <= pos.sl:   # never move SL backwards
+                    continue
+                result = modify_sl_tp(ticket, new_sl=new_sl)
+                if "❌" not in result:
+                    session.trail_prices[ticket] = current
+                    trailed.append((ticket, new_sl))
+                    log.info(f"Trail [{session.signal_id}]: #{ticket} price={current} → SL={new_sl}")
+
+    if trailed:
+        lines = "\n".join(f"  `#{t}` → SL `{sl}`" for t, sl in trailed)
+        await _notify(bot, (
+            f"📈 *Trailing Stop updated — {len(trailed)} position(s)*\n"
+            f"`{signal.symbol} {signal.direction.upper()}`\n"
+            f"{lines}\n"
+            f"_Trailing {TRAIL_PIPS}p behind price_"
         ))
 
 
@@ -402,9 +467,10 @@ async def watch_layered_entry(signal, signal_id: str, bot,
 
         placed_tickets = [t for sub in session.tickets for t in sub]
 
-        # ── Profit lock — secure positions at +50 pips ────────────────────────
+        # ── Profit lock + trailing stop ───────────────────────────────────────
         if placed_tickets:
             await _check_profit_lock(session, bot)
+            await _trail_stops(session, bot)
 
         # ── Check for stop-outs on placed layers ──────────────────────────────
         if placed_tickets:
@@ -586,6 +652,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                         entry_mode,         # entry_mode ('layered_dca' or 'mapped')
                         layer_num,          # layer_num
                         _skip_rr,           # skip_rr_check for manual trades
+                        entry_mode == "manual",  # skip_session for manual /buynow /sellnow
                     )
 
                     if "Trade Executed" in result:

@@ -22,6 +22,7 @@ from core.config import (
     YOUR_CHAT_ID, SIGNAL_EXPIRY, WATCH_INTERVAL_SECS,
     MT5_SYMBOL_SUFFIX, SL_PIP_SIZE, ENTRY_MAX_DISTANCE_PIPS,
     PROFIT_LOCK_ENABLED, PROFIT_LOCK_PIPS, PROFIT_LOCK_TP_PIPS,
+    TRAIL_ENABLED, TRAIL_PIPS,
 )
 from core.mt5   import mt5_connect, execute_trade, modify_sl_tp
 from core.state import pending
@@ -152,14 +153,14 @@ async def watch_and_execute(signal, signal_id: str, bot):
 async def _monitor_profit_lock(signal, signal_id: str, bot, symbol: str):
     """
     After execution, monitor open positions for this signal.
-    When profit >= PROFIT_LOCK_PIPS, move SL to breakeven and tighten TP.
+    - Profit lock: at +PROFIT_LOCK_PIPS → SL to breakeven, TP tightened
+    - Trailing stop: after lock, trail SL every TRAIL_PIPS of further movement
     Exits when all positions are closed.
     """
-    if not PROFIT_LOCK_ENABLED:
-        return
-
     locked_tickets = set()
-    log.info(f"ProfitLock [{signal_id}]: monitoring started")
+    trail_prices   = {}   # ticket → best price seen
+    trail_pts      = TRAIL_PIPS * SL_PIP_SIZE
+    log.info(f"Monitor [{signal_id}]: started (profit_lock={PROFIT_LOCK_ENABLED}, trail={TRAIL_ENABLED})")
 
     while True:
         await asyncio.sleep(WATCH_INTERVAL_SECS)
@@ -167,56 +168,94 @@ async def _monitor_profit_lock(signal, signal_id: str, bot, symbol: str):
         if not mt5_connect():
             continue
 
-        positions = mt5.positions_get(symbol=symbol)
+        all_positions = mt5.positions_get(symbol=symbol)
         mt5.shutdown()
 
-        if not positions:
-            log.info(f"ProfitLock [{signal_id}]: all positions closed — done")
+        if not all_positions:
+            log.info(f"Monitor [{signal_id}]: all positions closed — done")
             return
 
-        locked_this_cycle = []
-        for pos in positions:
-            if pos.ticket in locked_tickets:
-                continue
+        pos_map = {p.ticket: p for p in all_positions}
 
-            profit_pips = (
-                (pos.price_open - pos.price_current) / SL_PIP_SIZE
-                if signal.direction == "sell"
-                else (pos.price_current - pos.price_open) / SL_PIP_SIZE
-            )
+        # ── Profit lock ───────────────────────────────────────────────────────
+        if PROFIT_LOCK_ENABLED:
+            locked_this_cycle = []
+            for pos in all_positions:
+                if pos.ticket in locked_tickets:
+                    continue
+                profit_pips = (
+                    (pos.price_open - pos.price_current) / SL_PIP_SIZE
+                    if signal.direction == "sell"
+                    else (pos.price_current - pos.price_open) / SL_PIP_SIZE
+                )
+                if profit_pips < PROFIT_LOCK_PIPS:
+                    continue
+                new_sl = pos.price_open
+                new_tp = round(
+                    pos.price_open - PROFIT_LOCK_TP_PIPS * SL_PIP_SIZE
+                    if signal.direction == "sell"
+                    else pos.price_open + PROFIT_LOCK_TP_PIPS * SL_PIP_SIZE,
+                    2
+                ) if PROFIT_LOCK_TP_PIPS > 0 else pos.tp
+                result = modify_sl_tp(pos.ticket, new_sl=new_sl, new_tp=new_tp)
+                if "❌" not in result:
+                    locked_tickets.add(pos.ticket)
+                    trail_prices[pos.ticket] = pos.price_current
+                    locked_this_cycle.append((pos.ticket, profit_pips, new_tp))
+                    log.info(f"ProfitLock [{signal_id}]: #{pos.ticket} {profit_pips:.0f}p → SL=BE TP={new_tp}")
 
-            if profit_pips < PROFIT_LOCK_PIPS:
-                continue
-
-            new_sl = pos.price_open
-            new_tp = round(
-                pos.price_open - PROFIT_LOCK_TP_PIPS * SL_PIP_SIZE
-                if signal.direction == "sell"
-                else pos.price_open + PROFIT_LOCK_TP_PIPS * SL_PIP_SIZE,
-                2
-            ) if PROFIT_LOCK_TP_PIPS > 0 else pos.tp
-
-            result = modify_sl_tp(pos.ticket, new_sl=new_sl, new_tp=new_tp)
-            if "❌" not in result:
-                locked_tickets.add(pos.ticket)
-                locked_this_cycle.append((pos.ticket, profit_pips, new_tp))
-                log.info(
-                    f"ProfitLock [{signal_id}]: #{pos.ticket} "
-                    f"{profit_pips:.0f}p → SL=BE TP={new_tp}"
+            if locked_this_cycle:
+                lines = "\n".join(f"  `#{t}` — `{p:.0f}p` profit → TP `{tp}`" for t, p, tp in locked_this_cycle)
+                await bot.send_message(
+                    chat_id=YOUR_CHAT_ID,
+                    text=(
+                        f"🔒 *Profit Lock — {len(locked_this_cycle)} position(s) secured!*\n"
+                        f"`{signal.symbol} {signal.direction.upper()}`\n"
+                        f"{lines}\n"
+                        f"_SL moved to breakeven | TP tightened to {PROFIT_LOCK_TP_PIPS}p_"
+                    ),
+                    parse_mode="Markdown"
                 )
 
-        if locked_this_cycle:
-            lines = "\n".join(
-                f"  `#{t}` — `{p:.0f}p` profit → TP `{tp}`"
-                for t, p, tp in locked_this_cycle
-            )
-            await bot.send_message(
-                chat_id=YOUR_CHAT_ID,
-                text=(
-                    f"🔒 *Profit Lock — {len(locked_this_cycle)} position(s) secured!*\n"
-                    f"`{signal.symbol} {signal.direction.upper()}`\n"
-                    f"{lines}\n"
-                    f"_SL moved to breakeven | TP tightened to {PROFIT_LOCK_TP_PIPS}p_"
-                ),
-                parse_mode="Markdown"
-            )
+        # ── Trailing stop ─────────────────────────────────────────────────────
+        if TRAIL_ENABLED and trail_prices:
+            trailed = []
+            for ticket, best_price in list(trail_prices.items()):
+                pos = pos_map.get(ticket)
+                if pos is None:
+                    trail_prices.pop(ticket, None)
+                    continue
+                current = pos.price_current
+                if signal.direction == "sell":
+                    if current < best_price - trail_pts:
+                        new_sl = round(current + trail_pts, 2)
+                        if new_sl >= pos.sl:
+                            continue
+                        result = modify_sl_tp(ticket, new_sl=new_sl)
+                        if "❌" not in result:
+                            trail_prices[ticket] = current
+                            trailed.append((ticket, new_sl))
+                            log.info(f"Trail [{signal_id}]: #{ticket} price={current} → SL={new_sl}")
+                else:
+                    if current > best_price + trail_pts:
+                        new_sl = round(current - trail_pts, 2)
+                        if new_sl <= pos.sl:
+                            continue
+                        result = modify_sl_tp(ticket, new_sl=new_sl)
+                        if "❌" not in result:
+                            trail_prices[ticket] = current
+                            trailed.append((ticket, new_sl))
+                            log.info(f"Trail [{signal_id}]: #{ticket} price={current} → SL={new_sl}")
+
+            if trailed:
+                lines = "\n".join(f"  `#{t}` → SL `{sl}`" for t, sl in trailed)
+                await bot.send_message(
+                    chat_id=YOUR_CHAT_ID,
+                    text=(
+                        f"📈 *Trailing Stop updated — {len(trailed)} position(s)*\n"
+                        f"`{signal.symbol} {signal.direction.upper()}`\n"
+                        f"{lines}\n"
+                        f"_Trailing {TRAIL_PIPS}p behind price_"
+                    ),
+                    parse_mode="Markdown"
+                )

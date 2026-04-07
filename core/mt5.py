@@ -6,6 +6,7 @@ MT5 connection management and trade execution.
 import logging
 import json
 import time
+import datetime
 from pathlib import Path
 
 import MetaTrader5 as mt5
@@ -13,7 +14,8 @@ import MetaTrader5 as mt5
 from core.config import MT5_PATH, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_SYMBOL_SUFFIX, \
                        SL_PIP_SIZE, ENTRY_MAX_DISTANCE_PIPS, MIN_MARGIN_LEVEL, \
                        MAX_SPREAD_PIPS, MIN_RR_RATIO, BLOCK_SAME_DIRECTION_STACK, \
-                       TRADE_SPLIT, MIN_LOT, SL_MIN_PIPS, TP_ENFORCE_PIPS
+                       TRADE_SPLIT, MIN_LOT, SL_MIN_PIPS, TP_ENFORCE_PIPS, \
+                       SESSION_FILTER_ENABLED, SESSION_START_HOUR_UTC, SESSION_END_HOUR_UTC
 from core.signal import Signal
 from core.risk   import calculate_lot
 
@@ -71,7 +73,8 @@ def execute_trade(signal: Signal, signal_id: str = None,
                   skip_proximity: bool = False,
                   entry_mode: str = None,
                   layer_num: int = None,
-                  skip_rr_check: bool = False) -> str:
+                  skip_rr_check: bool = False,
+                  skip_session: bool = False) -> str:
     """
     Place a market order on MT5 for the given signal.
 
@@ -82,9 +85,26 @@ def execute_trade(signal: Signal, signal_id: str = None,
       skip_proximity – skip proximity guard (L2+ are intentionally outside zone)
       entry_mode     – 'layered_dca' | 'direct' | None (stored in DB for dashboard)
       layer_num      – 1/2/3… for DCA layers; None for direct trades
+      skip_session   – skip session filter (manual /buynow /sellnow)
 
     Returns a human-readable result message.
     """
+    # ── GUARD 0: Session filter — block new entries outside London/NY ─────────
+    if SESSION_FILTER_ENABLED and not skip_session:
+        h = datetime.datetime.utcnow().hour
+        if SESSION_START_HOUR_UTC <= SESSION_END_HOUR_UTC:
+            in_session = SESSION_START_HOUR_UTC <= h < SESSION_END_HOUR_UTC
+        else:   # wraps midnight e.g. 22:00–06:00
+            in_session = h >= SESSION_START_HOUR_UTC or h < SESSION_END_HOUR_UTC
+        if not in_session:
+            utc_now = datetime.datetime.utcnow().strftime("%H:%M UTC")
+            return (
+                f"⏰ *Trade blocked — outside trading session*\n"
+                f"Current time: `{utc_now}` | Session: "
+                f"`{SESSION_START_HOUR_UTC:02d}:00–{SESSION_END_HOUR_UTC:02d}:00 UTC`\n"
+                f"_3:00 PM–5:00 AM MYT (London + NY only)_"
+            )
+
     if not mt5_connect():
         return "❌ Could not connect to MT5."
 

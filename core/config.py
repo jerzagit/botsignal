@@ -104,6 +104,17 @@ PROFIT_LOCK_ENABLED = os.getenv("PROFIT_LOCK_ENABLED", "true").lower() == "true"
 PROFIT_LOCK_PIPS    = int(os.getenv("PROFIT_LOCK_PIPS", "50"))      # trigger at +N pips profit
 PROFIT_LOCK_TP_PIPS = int(os.getenv("PROFIT_LOCK_TP_PIPS", "100"))  # new TP = entry ± N pips
 
+# ── Trailing stop (activates after profit lock fires) ─────────────────────────
+# Trails SL every TRAIL_PIPS of further movement in profit direction.
+TRAIL_ENABLED = os.getenv("TRAIL_ENABLED", "true").lower() == "true"
+TRAIL_PIPS    = int(os.getenv("TRAIL_PIPS", "20"))   # pips of movement before SL is trailed
+
+# ── Session filter (block new entries outside London/NY hours) ────────────────
+# Uses UTC. London open=07:00, NY close=21:00. Set START > END for overnight wrap.
+SESSION_FILTER_ENABLED  = os.getenv("SESSION_FILTER_ENABLED", "true").lower() == "true"
+SESSION_START_HOUR_UTC  = int(os.getenv("SESSION_START_HOUR_UTC", "7"))   # 07:00 UTC = 3pm MYT
+SESSION_END_HOUR_UTC    = int(os.getenv("SESSION_END_HOUR_UTC",   "21"))  # 21:00 UTC = 5am MYT
+
 # ── AutoZone (auto-entry from SNR/SND mapped zones) ─────────────────────────
 MAP_ENABLED = os.getenv("MAP_ENABLED", "true").lower() == "true"
 
