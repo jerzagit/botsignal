@@ -123,6 +123,8 @@ MAX_SUB_SPLITS = int(os.getenv("MAX_SUB_SPLITS", "4"))   # max sub-orders per la
 L2_GAP_RATIO       = float(os.getenv("L2_GAP_RATIO", "0.40"))
 # Minimum runway (pips) between a layer trigger and SL. Skip layer if below this.
 L2_MIN_RUNWAY_PIPS = int(os.getenv("L2_MIN_RUNWAY_PIPS", "25"))
+# Fraction of total lot allocated to L1 (e.g. 0.30 = 30%). Remaining split equally across L2+.
+L1_LOT_RATIO       = float(os.getenv("L1_LOT_RATIO", "0.30"))
 
 # ── Manual trade (/buynow, /sellnow) ────────────────────────────────────────
 MANUAL_SL_PIPS      = int(os.getenv("MANUAL_SL_PIPS",   "50"))       # SL distance from entry

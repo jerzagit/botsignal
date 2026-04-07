@@ -38,6 +38,7 @@ from core.config import (
     MT5_SYMBOL_SUFFIX, SL_PIP_SIZE, ENTRY_MAX_DISTANCE_PIPS,
     LAYER_COUNT, LAYER2_PIPS, MIN_LOT, MAX_SUB_SPLITS,
     SL_MIN_PIPS, TP_ENFORCE_PIPS, L2_GAP_RATIO, L2_MIN_RUNWAY_PIPS,
+    L1_LOT_RATIO,
 )
 from core.mt5   import mt5_connect, execute_trade, set_breakeven
 from core.risk  import calculate_lot
@@ -52,13 +53,13 @@ layer_sessions: dict[str, "LayerSession"] = {}
 
 @dataclass
 class LayerSession:
-    signal:        object
-    signal_id:     str
-    actual_layers: int
-    lot_per_layer: float
-    effective_tps: list
-    sub_lot:       float          # lot per sub-order (lot_per_layer / tp_split)
-    tp_split:      int            # how many sub-orders per layer (= min(num_tps, affordable))
+    signal:         object
+    signal_id:      str
+    actual_layers:  int
+    lots_per_layer: list          # total lot per layer  [L1_lot, L2_lot, ...]
+    effective_tps:  list
+    sub_lots:       list          # sub-order lot per layer  [L1_sub, L2_sub, ...]
+    tp_splits:      list          # sub-order count per layer [L1_splits, L2_splits, ...]
     tickets: list = field(default_factory=list)   # list[list[int]] — sub-tickets per layer
     entries: list = field(default_factory=list)   # float|None per layer
     state:   str  = "WAIT_L1"
@@ -268,22 +269,32 @@ async def watch_layered_entry(signal, signal_id: str, bot,
             )
             actual_layers = max(1, max_by_sl)
 
-    lot_per_layer = max(MIN_LOT, round(total_lot / actual_layers, 2))
+    # ── Weighted lot split: L1=30%, L2+= remaining 70% split equally ────────
+    if actual_layers == 1:
+        lots_per_layer = [total_lot]
+    else:
+        l1_lot  = max(MIN_LOT, round(total_lot * L1_LOT_RATIO, 2))
+        remaining = max(MIN_LOT, round(total_lot - l1_lot, 2))
+        ln_lot  = max(MIN_LOT, round(remaining / (actual_layers - 1), 2))
+        lots_per_layer = [l1_lot] + [ln_lot] * (actual_layers - 1)
 
-    # ── Dynamic sub-splitting: split each layer into up to MAX_SUB_SPLITS ──
-    # Auto-scales with margin: $200->2-3 splits, $500->4, $1000+->4 (capped)
-    max_affordable = max(1, int(lot_per_layer / MIN_LOT))
-    tp_split = min(max_affordable, MAX_SUB_SPLITS)
-    sub_lot = max(MIN_LOT, round(lot_per_layer / tp_split, 2))
+    # ── Dynamic sub-splitting per layer ──────────────────────────────────────
+    sub_lots  = []
+    tp_splits = []
+    for lpl in lots_per_layer:
+        max_affordable = max(1, int(lpl / MIN_LOT))
+        ts = min(max_affordable, MAX_SUB_SPLITS)
+        sub_lots.append(max(MIN_LOT, round(lpl / ts, 2)))
+        tp_splits.append(ts)
 
     session = LayerSession(
         signal=signal,
         signal_id=signal_id,
         actual_layers=actual_layers,
-        lot_per_layer=lot_per_layer,
+        lots_per_layer=lots_per_layer,
         effective_tps=effective_tps,
-        sub_lot=sub_lot,
-        tp_split=tp_split,
+        sub_lots=sub_lots,
+        tp_splits=tp_splits,
         tickets=[[] for _ in range(actual_layers)],
         entries=[None] * actual_layers,
     )
@@ -291,11 +302,11 @@ async def watch_layered_entry(signal, signal_id: str, bot,
 
     log.info(
         f"LayerWatcher [{signal_id}]: "
-        f"actual_layers={actual_layers} lot_per_layer={lot_per_layer} "
-        f"sub_lot={sub_lot} tp_split={tp_split} "
+        f"actual_layers={actual_layers} lots_per_layer={lots_per_layer} "
+        f"sub_lots={sub_lots} tp_splits={tp_splits} "
         f"total_lot={total_lot} layer_gap={effective_gap}p "
         f"(ratio={L2_GAP_RATIO}, sl={sl_pips_signal:.0f}p) "
-        f"min_runway={L2_MIN_RUNWAY_PIPS}p"
+        f"min_runway={L2_MIN_RUNWAY_PIPS}p L1_ratio={L1_LOT_RATIO}"
     )
 
     next_idx = 0   # index of the next layer to place
@@ -478,8 +489,8 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                 layer_blocked = None   # first non-spread block message
                 spread_retry  = False
 
-                for tp_idx in range(session.tp_split):
-                    tp_val  = _tp_for_sub_order(tp_idx, session.tp_split, effective_tps)
+                for tp_idx in range(session.tp_splits[next_idx]):
+                    tp_val  = _tp_for_sub_order(tp_idx, session.tp_splits[next_idx], effective_tps)
                     all_own = own_tix + layer_tickets   # include already-placed sub-orders
 
                     _skip_rr = (entry_mode == "manual")
@@ -488,7 +499,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                         execute_trade,
                         signal,
                         signal_id,
-                        session.sub_lot,    # lot_override (sub-lot)
+                        session.sub_lots[next_idx],    # lot_override (sub-lot)
                         all_own,            # own_tickets (exempt from stack guard)
                         tp_val,             # tp_override -> single-order mode
                         next_idx > 0,       # skip_proximity for L2+
@@ -540,7 +551,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                     # Build TP breakdown label: TP1 × N | TP2 × N | Runner × N
                     tp_counts = {}
                     for i in range(len(layer_tickets)):
-                        tv = _tp_for_sub_order(i, session.tp_split, effective_tps)
+                        tv = _tp_for_sub_order(i, session.tp_splits[next_idx - 1], effective_tps)
                         if tv == 0.0:
                             tp_counts["Runner"] = tp_counts.get("Runner", 0) + 1
                         else:
@@ -558,7 +569,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                     await _notify(bot, (
                         f"📍 *Layer {layer_num}/{actual_layers} placed @ `{price:.2f}`*\n"
                         f"`{signal.symbol} {signal.direction.upper()}`\n"
-                        f"Lot: `{session.sub_lot} × {len(layer_tickets)}` | {tp_labels}\n"
+                        f"Lot: `{session.sub_lots[next_idx - 1]} × {len(layer_tickets)}` | {tp_labels}\n"
                         f"Tickets: {tix_str}"
                         + next_msg
                     ))
