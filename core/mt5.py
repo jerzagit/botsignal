@@ -281,6 +281,12 @@ def execute_trade(signal: Signal, signal_id: str = None,
         r = mt5.order_send(req)
         mt5.shutdown()
         if r.retcode != mt5.TRADE_RETCODE_DONE:
+            log.error(
+                f"Layer order FAILED | {symbol} {signal.direction.upper()} "
+                f"price={price} sl={actual_sl} tp={actual_tp_override} lot={lot} "
+                f"retcode={r.retcode} comment={r.comment!r} "
+                f"entry_mode={entry_mode}"
+            )
             return f"❌ Layer order failed: `{r.comment}` (code `{r.retcode}`)"
         from core.db import record_trade
         _log_trade(signal, lot, price, r.order)
