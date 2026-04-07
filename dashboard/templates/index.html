@@ -413,7 +413,113 @@ TP distribution (thirds strategy):
 $200  → 3 splits: TP1 + TP2 + Runner
 $500  → 4 splits: TP1 + TP2×2 + Runner
 $1000 → 4 splits: TP1 + TP2×2 + Runner
-Runner = no TP, rides with BE protection at +40p</div>
+Runner = no TP, rides with BE protection</div>
+      </div>
+    </div>
+    <div class="guard-card info" id="gc-dynamic-gap">
+      <div class="g-title">DCA Gap & Runway</div>
+      <div class="g-threshold" id="gc-dynamic-gap-thresh">—</div>
+      <div class="g-live na" id="gc-dynamic-gap-live">Applied per DCA session</div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Layer gap scales with SL size instead of using a fixed pip distance. Runway guard skips any layer whose trigger is too close to SL — prevents entries with no room to breathe.
+        <div class="scenario">Dynamic gap: gap = SL × ratio
+  50p SL × 0.40 = 20p gap between layers
+  40p SL × 0.40 = 16p gap
+
+Runway guard: skip if trigger < min runway from SL
+  L3 trigger = entry - 40p, SL = entry - 50p
+  Runway = 10p < 25p minimum → L3 SKIPPED
+
+If L2_GAP_RATIO = 0 → falls back to fixed LAYER2_PIPS</div>
+      </div>
+    </div>
+    <div class="guard-card info" id="gc-trend">
+      <div class="g-title">Trend Filter</div>
+      <div class="g-threshold" id="gc-trend-thresh">—</div>
+      <div class="g-live na" id="gc-trend-live">Background watcher</div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Analyzes H1 + H4 direction using EMA crossover, RSI, and candle structure. Auto-alerts on direction changes. Manual trades (/buynow /sellnow) warn if opposing trend — CONFIRM or CANCEL.
+        <div class="scenario">Indicators (2/3 agree = direction):
+  EMA 9/21 crossover
+  RSI 14 (>55 bull, <45 bear)
+  3-bar HH/HL structure
+
+/buynow when H1=BEAR, H4=BEAR:
+  → Warning: "H1: BEAR | H4: BEAR — opposing BUY"
+  → [CONFIRM] [CANCEL] buttons
+  → CONFIRM executes against trend
+  → CANCEL aborts trade
+
+Hafiz signals: NO trend check (fully automatic)
+/trend command: shows M5/M15/H1/H4 table</div>
+      </div>
+    </div>
+    <div class="guard-card info" id="gc-fib-guard">
+      <div class="g-title">Fib Retracement Guard</div>
+      <div class="g-threshold" id="gc-fib-guard-thresh">—</div>
+      <div class="g-live na" id="gc-fib-guard-live">Checked on manual trades</div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Checks if price is in the 0–38.2% Fibonacci retracement zone of the last opposite H1 candle. Ensures you're buying dips and selling rallies — not chasing.
+        <div class="scenario">BUY check:
+  Find last bearish H1 candle (close < open)
+  0% = candle low (best buy), 100% = candle high
+  Price at 15% → ✅ in zone (buying the dip)
+  Price at 60% → ❌ above 38.2% (chasing)
+
+SELL check:
+  Find last bullish H1 candle (close > open)
+  0% = candle high (best sell), 100% = candle low
+  Price at 10% → ✅ in zone (selling the rally)
+
+Outside zone → CONFIRM/CANCEL warning
+Combined with trend warning into single message</div>
+      </div>
+    </div>
+    <div class="guard-card info" id="gc-fib-scanner">
+      <div class="g-title">Fib Entry Scanner</div>
+      <div class="g-threshold" id="gc-fib-scanner-thresh">—</div>
+      <div class="g-live na" id="gc-fib-scanner-live">Background scanner</div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Background loop that auto-detects when price enters a Fib pullback zone. Sends Telegram alert with BUY NOW / SELL NOW / DISMISS buttons. One alert per direction per H1 candle (cooldown).
+        <div class="scenario">Every 60s: scan BUY + SELL fib zones
+  Price enters 0–38.2% of last bearish H1 candle
+  → 📊 Fib Entry Alert — 🟢 BUY zone
+  → XAUUSD @ 4820.50 | Fib: 12% ✅
+  → Trend: H1 BULL ✅ | H4 BULL ✅
+  → [🟢 BUY NOW] [❌ DISMISS]
+
+BUY NOW tapped:
+  → Re-validates fib zone at current price
+  → If still in zone → execute via DCA pipeline
+  → If moved out → CONFIRM/CANCEL warning
+
+Cooldown: 1 alert per (direction, candle) pair
+Stale cleanup: 30min pending, 24h cooldown</div>
+      </div>
+    </div>
+    <div class="guard-card info" id="gc-manual">
+      <div class="g-title">Manual Trade</div>
+      <div class="g-threshold" id="gc-manual-thresh">—</div>
+      <div class="g-live na" id="gc-manual-live">/buynow · /sellnow</div>
+      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
+      <div class="g-detail">
+        Instant market entry with fixed SL/TP pip distances. Separate risk allocation from Hafiz signals. Runs through same DCA pipeline — all 6 guards, layered entry, sub-splitting, profit lock.
+        <div class="scenario">/buynow flow:
+  1. Get current ask price from MT5
+  2. Calculate SL/TP from fixed pip distances
+  3. Check trend (H1+H4) — warn if opposing
+  4. Check fib (H1) — warn if outside 38.2%
+  5. If warnings → CONFIRM/CANCEL
+  6. If clear → execute immediately
+  7. DCA layers + sub-splits + TP thirds
+  8. Profit lock monitors positions
+
+Risk: separate MANUAL_RISK_PERCENT (not Hafiz's)
+Does NOT affect Hafiz signal flow</div>
       </div>
     </div>
   </div>
@@ -562,6 +668,7 @@ Runner = no TP, rides with BE protection at +40p</div>
   function entryBadge(mode, layerNum) {
     if (mode === 'layered_dca') return `<span class="badge dca">DCA L${layerNum || '?'}</span>`;
     if (mode === 'mapped')      return `<span class="badge mapped">MAP${layerNum ? ' L'+layerNum : ''}</span>`;
+    if (mode === 'manual')      return `<span class="badge manual">MANUAL${layerNum ? ' L'+layerNum : ''}</span>`;
     if (mode === 'direct')      return `<span class="badge direct">DIRECT</span>`;
     return '';
   }
@@ -699,6 +806,29 @@ Runner = no TP, rides with BE protection at +40p</div>
             document.getElementById('gc-dca-live').textContent = 'DCA Disabled (single entry mode)';
           }
         }
+
+        // New guard cards
+        set('gc-dynamic-gap-thresh', d.dynamic_gap?.threshold || '—');
+        if (d.dynamic_gap && !d.dynamic_gap.enabled) {
+          set('gc-dynamic-gap-live', `Fixed ${d.dynamic_gap?.fallback_pips}p gap`);
+        }
+
+        set('gc-trend-thresh', d.trend?.threshold || '—');
+        if (d.trend && !d.trend.enabled) {
+          set('gc-trend-live', 'Disabled');
+        }
+
+        set('gc-fib-guard-thresh', d.fib_guard?.threshold || '—');
+        if (d.fib_guard && !d.fib_guard.enabled) {
+          set('gc-fib-guard-live', 'Disabled');
+        }
+
+        set('gc-fib-scanner-thresh', d.fib_scanner?.threshold || '—');
+        if (d.fib_scanner && !d.fib_scanner.enabled) {
+          set('gc-fib-scanner-live', 'Disabled');
+        }
+
+        set('gc-manual-thresh', d.manual_trade?.threshold || '—');
 
         // Environment badge
         const envBadge = document.getElementById('env-badge');

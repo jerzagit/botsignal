@@ -63,6 +63,21 @@ CREATE TABLE IF NOT EXISTS mapping_zones (
     INDEX idx_active (valid_date, fired)
 );
 
+CREATE TABLE IF NOT EXISTS candles (
+    id          INT            AUTO_INCREMENT PRIMARY KEY,
+    symbol      VARCHAR(20)    NOT NULL,
+    timeframe   VARCHAR(8)     NOT NULL,          -- 'H1', 'H4', 'D1', etc.
+    candle_time DATETIME       NOT NULL,          -- candle open time (UTC)
+    open        DECIMAL(12,5)  NOT NULL,
+    high        DECIMAL(12,5)  NOT NULL,
+    low         DECIMAL(12,5)  NOT NULL,
+    close       DECIMAL(12,5)  NOT NULL,
+    volume      BIGINT         DEFAULT 0,
+    saved_at    DATETIME       DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_candle (symbol, timeframe, candle_time),
+    INDEX idx_symbol_tf_time (symbol, timeframe, candle_time)
+);
+
 CREATE TABLE IF NOT EXISTS guard_events (
     id             INT           AUTO_INCREMENT PRIMARY KEY,
     fired_at       DATETIME      DEFAULT CURRENT_TIMESTAMP,

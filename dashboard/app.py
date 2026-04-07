@@ -25,6 +25,13 @@ from core.config import (
     MT5_SYMBOL_SUFFIX, SL_PIP_SIZE, ENV_MODE, MAP_ENABLED,
     PROFIT_LOCK_ENABLED, PROFIT_LOCK_PIPS, PROFIT_LOCK_TP_PIPS,
     LAYER_MODE, LAYER_COUNT, LAYER2_PIPS, MAX_SUB_SPLITS,
+    L2_GAP_RATIO, L2_MIN_RUNWAY_PIPS,
+    FIB_GUARD_ENABLED, FIB_MAX_RETRACEMENT,
+    FIB_SCANNER_ENABLED, FIB_SCANNER_INTERVAL,
+    TREND_ENABLED, TREND_INTERVAL,
+    TREND_EMA_SHORT, TREND_EMA_LONG, TREND_RSI_PERIOD,
+    MANUAL_SL_PIPS, MANUAL_TP1_PIPS, MANUAL_TP2_PIPS,
+    MANUAL_SYMBOL, MANUAL_RISK_PERCENT,
 )
 from dashboard.poller import start_poller
 
@@ -198,7 +205,40 @@ def api_guards_config():
             "layer_gap_pips": LAYER2_PIPS,
             "max_sub_splits": MAX_SUB_SPLITS,
             "min_lot":        MIN_LOT,
-            "threshold":      f"{'ON' if LAYER_MODE else 'OFF'} · {LAYER_COUNT} layers · {LAYER2_PIPS}p gap · {MAX_SUB_SPLITS} splits",
+            "threshold":      f"{'ON' if LAYER_MODE else 'OFF'} · {LAYER_COUNT} layers · {MAX_SUB_SPLITS} splits",
+        },
+        "dynamic_gap": {
+            "enabled":      L2_GAP_RATIO > 0,
+            "gap_ratio":    L2_GAP_RATIO,
+            "min_runway":   L2_MIN_RUNWAY_PIPS,
+            "fallback_pips": LAYER2_PIPS,
+            "threshold":    f"Gap = SL × {L2_GAP_RATIO} | Runway ≥ {L2_MIN_RUNWAY_PIPS}p" if L2_GAP_RATIO > 0 else f"Fixed {LAYER2_PIPS}p gap",
+        },
+        "trend": {
+            "enabled":    TREND_ENABLED,
+            "interval":   TREND_INTERVAL,
+            "ema_short":  TREND_EMA_SHORT,
+            "ema_long":   TREND_EMA_LONG,
+            "rsi_period": TREND_RSI_PERIOD,
+            "threshold":  f"{'ON' if TREND_ENABLED else 'OFF'} · EMA {TREND_EMA_SHORT}/{TREND_EMA_LONG} · RSI {TREND_RSI_PERIOD} · {TREND_INTERVAL}s",
+        },
+        "fib_guard": {
+            "enabled":   FIB_GUARD_ENABLED,
+            "max_retrace": f"{FIB_MAX_RETRACEMENT*100:.1f}%",
+            "threshold": f"{'ON' if FIB_GUARD_ENABLED else 'OFF'} · 0–{FIB_MAX_RETRACEMENT*100:.0f}% H1 zone",
+        },
+        "fib_scanner": {
+            "enabled":  FIB_SCANNER_ENABLED,
+            "interval": FIB_SCANNER_INTERVAL,
+            "threshold": f"{'ON' if FIB_SCANNER_ENABLED else 'OFF'} · scan every {FIB_SCANNER_INTERVAL}s",
+        },
+        "manual_trade": {
+            "symbol":      MANUAL_SYMBOL,
+            "sl_pips":     MANUAL_SL_PIPS,
+            "tp1_pips":    MANUAL_TP1_PIPS,
+            "tp2_pips":    MANUAL_TP2_PIPS,
+            "risk_pct":    int(MANUAL_RISK_PERCENT * 100),
+            "threshold":   f"{MANUAL_SYMBOL} · SL {MANUAL_SL_PIPS}p · TP {MANUAL_TP1_PIPS}/{MANUAL_TP2_PIPS}p · {int(MANUAL_RISK_PERCENT*100)}% risk",
         },
     })
 

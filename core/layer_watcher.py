@@ -299,6 +299,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
     )
 
     next_idx = 0   # index of the next layer to place
+    stack_notified = False   # only send "waiting for stack" message once
 
     # ── Main loop ─────────────────────────────────────────────────────────────
     while True:
@@ -445,15 +446,16 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                     # ── Runway guard: skip if trigger too close to SL ──
                     runway_pips = abs(trigger - signal.sl) / SL_PIP_SIZE
                     if runway_pips < L2_MIN_RUNWAY_PIPS:
+                        _lnum = next_idx + 1
                         log.info(
-                            f"LayerWatcher [{signal_id}]: L{next_idx+1} runway "
+                            f"LayerWatcher [{signal_id}]: L{_lnum} runway "
                             f"{runway_pips:.0f}p < min {L2_MIN_RUNWAY_PIPS}p — "
                             f"skipping (trigger={trigger:.2f}, SL={signal.sl})"
                         )
                         session.tickets[next_idx] = []   # mark slot as skipped
                         next_idx += 1
                         await _notify(bot, (
-                            f"⏭️ *L{layer_num}/{actual_layers} skipped — "
+                            f"⏭️ *L{_lnum}/{actual_layers} skipped — "
                             f"runway too short ({runway_pips:.0f}p < {L2_MIN_RUNWAY_PIPS}p)*\n"
                             f"`{signal.symbol} {signal.direction.upper()}`\n"
                             f"_Trigger {trigger:.2f} only {runway_pips:.0f}p from SL {signal.sl}_"
@@ -515,6 +517,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
 
                 elif layer_tickets:
                     # At least some sub-orders placed successfully
+                    stack_notified = False   # reset for any future stack waits
                     session.tickets[next_idx] = layer_tickets
                     session.entries[next_idx] = price
                     next_idx += 1
@@ -563,14 +566,29 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                 elif layer_blocked:
                     # Guard blocked — no sub-orders placed
                     if next_idx == 0:
-                        # L1 blocked — fatal, session over
-                        pending.pop(signal_id, None)
-                        upsert_signal(signal_id, signal, status="blocked")
-                        session.state = "DONE"
-                        await _notify(bot, (
-                            f"🚫 *Layer 1 blocked — session ended*\n\n{layer_blocked}"
-                        ))
-                        return
+                        # Stack guard on L1: retry each interval until clear or deadline
+                        if "position(s) at risk" in layer_blocked:
+                            log.info(
+                                f"LayerWatcher [{signal_id}]: "
+                                f"L1 stack blocked — retrying next tick"
+                            )
+                            if not stack_notified:
+                                stack_notified = True
+                                await _notify(bot, (
+                                    f"⏳ *Layer 1 waiting — stack guard*\n"
+                                    f"`{signal.symbol} {signal.direction.upper()}`\n"
+                                    f"_Existing {signal.direction.upper()} position at risk. "
+                                    f"Will auto-enter when it closes or hits breakeven._"
+                                ))
+                        else:
+                            # Any other guard on L1 — fatal, session over
+                            pending.pop(signal_id, None)
+                            upsert_signal(signal_id, signal, status="blocked")
+                            session.state = "DONE"
+                            await _notify(bot, (
+                                f"🚫 *Layer 1 blocked — session ended*\n\n{layer_blocked}"
+                            ))
+                            return
                     else:
                         # L2+ blocked — skip this layer slot, try next
                         log.info(

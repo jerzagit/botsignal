@@ -10,10 +10,12 @@
 | `YOUR_CHAT_ID` | ✅ Done |
 | `SIGNAL_GROUP` | ✅ Done — PIPS FIGHTER 2026 (`-1002083967629`) |
 | `MT5_PATH` | ✅ Done — VT Markets MT5 terminal path |
-| `MT5_LOGIN` | ✅ Done — #26656038 (live) / #1067995 (demo) |
-| `MT5_PASSWORD` | ✅ Done |
-| `MT5_SERVER` | ✅ Done — `VTMarkets-Live 5` / `VTMarkets-Demo` |
-| `MT5_SYMBOL_SUFFIX` | ✅ Done — `-STD` (live) / `-VIP` (demo) |
+| `DEMO_MT5_LOGIN` | ✅ Done — #1067995 (STD demo) |
+| `DEMO_MT5_SERVER` | ✅ Done — `VTMarkets-Demo` |
+| `DEMO_MT5_SYMBOL_SUFFIX` | ✅ Done — `-VIP` |
+| `LIVE_MT5_LOGIN` | ✅ Done — #26578318 (USC live) |
+| `LIVE_MT5_SERVER` | ✅ Done — `VTMarkets-Live 3` |
+| `LIVE_MT5_SYMBOL_SUFFIX` | ✅ Done — `-STDc` (USC/cent) |
 | `DB_HOST/PORT/NAME` | ✅ Done — MySQL Docker on port 3307 |
 
 ---
@@ -49,13 +51,15 @@
 Change **one line** in `.env`:
 
 ```env
-ENV_MODE=demo    # UAT testing
-ENV_MODE=live    # real money
+ENV_MODE=demo    # UAT testing — uses DEMO_MT5_* credentials
+ENV_MODE=live    # real money  — uses LIVE_MT5_* credentials
 ```
 
 Restart `bot.py`. Log into the matching account in MT5 terminal first.
 Both sets of credentials stay in `.env` — no commenting/uncommenting needed.
-Spread guard auto-adjusts: 5 pips for demo, 3 pips for live.
+Spread guard auto-adjusts per env: `DEMO_MAX_SPREAD_PIPS` / `LIVE_MAX_SPREAD_PIPS`.
+
+For full account switching guide (STD ↔ USC, demo ↔ live), see **USC_SETUP.md**.
 
 ---
 
@@ -73,13 +77,13 @@ SIGNAL_GROUP=-1002083967629    # PIPS FIGHTER 2026 numeric ID
 ENV_MODE=demo                  # demo or live — switches everything below
 
 # ── MT5 Account ───────────────────────────────────────
-MT5_PATH=C:\Program Files\VT Markets (Pty) MT5 Terminal\terminal64.exe
-DEMO_MT5_LOGIN=1068498
+MT5_PATH=C:\Program Files\MetaTrader 5\terminal64.exe
+DEMO_MT5_LOGIN=1067995          # STD demo account
 DEMO_MT5_SERVER=VTMarkets-Demo
 DEMO_MT5_SYMBOL_SUFFIX=-VIP
-LIVE_MT5_LOGIN=26656038
-LIVE_MT5_SERVER=VTMarkets-Live 5
-LIVE_MT5_SYMBOL_SUFFIX=-STD
+LIVE_MT5_LOGIN=26578318         # USC live account (cent)
+LIVE_MT5_SERVER=VTMarkets-Live 3
+LIVE_MT5_SYMBOL_SUFFIX=-STDc   # USC suffix — change to -STD for Standard live
 
 # ── Risk Management ───────────────────────────────────
 RISK_PERCENT=0.10              # 10% of free margin per trade

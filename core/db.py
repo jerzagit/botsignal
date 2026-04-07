@@ -159,6 +159,68 @@ def update_trade_outcome(ticket: int, outcome: str, close_price: float,
         log.error(f"db.update_trade_outcome failed: {e}")
 
 
+# ── OHLC candles ──────────────────────────────────────────────────────────────
+
+def upsert_candles(symbol: str, timeframe: str, candles: list[dict]) -> int:
+    """
+    Bulk upsert OHLC candles into the candles table.
+    Each candle dict: {time (unix int), open, high, low, close, volume}
+    Returns number of rows inserted/updated.
+    """
+    if not candles:
+        return 0
+    sql = """
+        INSERT INTO candles (symbol, timeframe, candle_time, open, high, low, close, volume)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            open   = VALUES(open),
+            high   = VALUES(high),
+            low    = VALUES(low),
+            close  = VALUES(close),
+            volume = VALUES(volume)
+    """
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            rows = [
+                (
+                    symbol, timeframe,
+                    datetime.utcfromtimestamp(c["time"]),
+                    c["open"], c["high"], c["low"], c["close"],
+                    c.get("volume", 0),
+                )
+                for c in candles
+            ]
+            cur.executemany(sql, rows)
+            count = cur.rowcount
+        conn.close()
+        return count
+    except Exception as e:
+        log.error(f"db.upsert_candles failed: {e}")
+        return 0
+
+
+def get_candles(symbol: str, timeframe: str, limit: int = 100) -> list[dict]:
+    """Return the most recent `limit` candles for a symbol/timeframe, oldest first."""
+    sql = """
+        SELECT candle_time, open, high, low, close, volume
+        FROM candles
+        WHERE symbol = %s AND timeframe = %s
+        ORDER BY candle_time DESC
+        LIMIT %s
+    """
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute(sql, (symbol, timeframe, limit))
+            rows = cur.fetchall()
+        conn.close()
+        return list(reversed(rows))   # oldest first
+    except Exception as e:
+        log.error(f"db.get_candles failed: {e}")
+        return []
+
+
 # ── SNR levels ────────────────────────────────────────────────────────────────
 
 def set_snr_levels(symbol: str, prices: list[float]):

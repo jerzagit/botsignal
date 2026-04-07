@@ -1,102 +1,134 @@
-# Switching to USC (US Cent) Account
+# Account Switching Guide
 
 ## Overview
 
-The bot auto-adapts to any MT5 account type. Switching to USC only requires changing credentials in `.env`.
+The bot supports four account configurations. All switching is done via `.env` only — no code changes needed. The bot auto-adapts lot sizing, pip values, and contract sizes from live MT5 symbol specs.
+
+| Account type | `ENV_MODE` | Credentials prefix | Current account |
+|---|---|---|---|
+| Demo STD (testing) | `demo` | `DEMO_MT5_*` | #1067995 — VTMarkets-Demo |
+| Live STD (standard USD) | `live` | `LIVE_MT5_*` | — (not set up yet) |
+| Live USC (US Cent) | `live` | `LIVE_MT5_*` | #26578318 — VTMarkets-Live 3 |
 
 ---
 
-## Step 1: Get Your USC Account Details
+## Current `.env` State
 
-From your broker (VT Markets or similar), note down:
-- **Login** (account number)
-- **Password**
-- **Server name** (e.g. `VTMarkets-Live 3` or similar)
+```env
+ENV_MODE=demo                        # active: demo STD
 
-## Step 2: Find the Symbol Suffix
+DEMO_MT5_LOGIN=1067995
+DEMO_MT5_PASSWORD=321Trade!@
+DEMO_MT5_SERVER=VTMarkets-Demo
+DEMO_MT5_SYMBOL_SUFFIX=-VIP
+DEMO_MAX_SPREAD_PIPS=5
 
-1. Open MT5 with your USC account
+LIVE_MT5_LOGIN=26578318              # USC live account
+LIVE_MT5_PASSWORD=321Trade!@
+LIVE_MT5_SERVER=VTMarkets-Live 3
+LIVE_MT5_SYMBOL_SUFFIX=-STDc         # USC/cent suffix
+LIVE_MAX_SPREAD_PIPS=5
+```
+
+---
+
+## Scenario 1 — Switch Demo → Live USC
+
+1. Log into account `#26578318` in MT5 terminal (server: `VTMarkets-Live 3`)
+2. Update `.env`:
+   ```env
+   ENV_MODE=live
+   ```
+3. Restart `python bot.py`
+
+No other changes needed. `LIVE_MT5_*` credentials are already set.
+
+---
+
+## Scenario 2 — Switch Live USC → Live STD
+
+When you get a Standard (USD) live account from VT Markets:
+
+1. Log into your new STD account in MT5
+2. Check the symbol suffix in MT5 Market Watch (Ctrl+M) — find XAUUSD and note the suffix (e.g. `XAUUSD-STD` → suffix is `-STD`)
+3. Update `.env`:
+   ```env
+   ENV_MODE=live
+
+   LIVE_MT5_LOGIN=YOUR_STD_LOGIN
+   LIVE_MT5_PASSWORD=YOUR_STD_PASSWORD
+   LIVE_MT5_SERVER=YOUR_STD_SERVER       # e.g. VTMarkets-Live 5
+   LIVE_MT5_SYMBOL_SUFFIX=-STD           # update to match what you found
+   LIVE_MAX_SPREAD_PIPS=3                # tighter spread for STD accounts
+   ```
+4. Restart `python bot.py`
+
+---
+
+## Scenario 3 — Switch Live STD → Live USC (rollback)
+
+1. Log into account `#26578318` in MT5 terminal (server: `VTMarkets-Live 3`)
+2. Update `.env`:
+   ```env
+   ENV_MODE=live
+
+   LIVE_MT5_LOGIN=26578318
+   LIVE_MT5_PASSWORD=321Trade!@
+   LIVE_MT5_SERVER=VTMarkets-Live 3
+   LIVE_MT5_SYMBOL_SUFFIX=-STDc
+   LIVE_MAX_SPREAD_PIPS=5
+   ```
+3. Restart `python bot.py`
+
+---
+
+## Scenario 4 — Switch to Demo for Testing
+
+Any time you want to test on demo before going live:
+
+1. Log into account `#1067995` in MT5 terminal (server: `VTMarkets-Demo`)
+2. Update `.env`:
+   ```env
+   ENV_MODE=demo
+   ```
+3. Restart `python bot.py`
+
+Demo credentials (`DEMO_MT5_*`) are already saved — no other changes needed.
+
+---
+
+## How to Find the Symbol Suffix
+
+1. Open MT5 with the account you're switching to
 2. Go to **Market Watch** (Ctrl+M)
-3. Find XAUUSD — note the suffix (e.g. `XAUUSD-USC`, `XAUUSD.c`, `XAUUSDc`)
-4. The suffix is everything after `XAUUSD` (e.g. `-USC`, `.c`, `c`)
+3. Find XAUUSD — the full name shows the suffix (e.g. `XAUUSD-STD`)
+4. The suffix is everything after `XAUUSD` (e.g. `-STD`, `-STDc`, `-VIP`)
 
-## Step 3: Check Min Lot
-
-1. In MT5 Market Watch, right-click your XAUUSD symbol
-2. Click **Specification**
-3. Note **Minimal Volume** (usually `0.01` or `0.1` for cent accounts)
-4. Note **Volume Step** (usually `0.01`)
-
-## Step 4: Update `.env`
-
-Change these lines in your `.env` file:
-
-```env
-# ── LIVE account (USC) ─────────────────────────────────
-LIVE_MT5_LOGIN=YOUR_USC_LOGIN
-LIVE_MT5_PASSWORD=YOUR_USC_PASSWORD
-LIVE_MT5_SERVER=YOUR_USC_SERVER
-LIVE_MT5_SYMBOL_SUFFIX=-USC          # <-- whatever suffix you found in Step 2
-LIVE_MAX_SPREAD_PIPS=3
-```
-
-If the min lot is different from `0.01`:
-```env
-MIN_LOT=0.01    # <-- change to match MT5 Specification
-```
-
-## Step 5: Verify SL Pip Size
-
-Check that XAUUSD price format is the same (e.g. `3000.xx`):
-- If yes — no change needed (`SL_PIP_SIZE=0.1` stays)
-- If price shows extra decimals (e.g. `3000.xxx`) — change `SL_PIP_SIZE=0.01`
-
-## Step 6: Test on Demo First
-
-```env
-ENV_MODE=demo
-```
-
-1. Restart bot: `python bot.py`
-2. Send `/buynow` in Telegram
-3. Check MT5 — trade should appear with correct lot, SL, TP
-4. Check dashboard — trade should show up
-
-## Step 7: Go Live
-
-```env
-ENV_MODE=live
-```
-
-Restart bot. Done.
+If XAUUSD is not visible in Market Watch, right-click → Show All, then search for it.
 
 ---
 
-## What Auto-Adapts (No Changes Needed)
+## STD vs USC — Key Differences
 
-| Component | How It Works |
-|-----------|-------------|
-| Lot calculation | Uses `symbol_info().trade_tick_value` from MT5 |
-| Contract size | Uses `symbol_info().trade_contract_size` from MT5 |
-| Volume step | Uses `symbol_info().volume_step` from MT5 |
-| Pip value | Uses `symbol_info().trade_tick_value` from MT5 |
-| All 6 guards | Work on pips/percentages — account-type agnostic |
-| DCA layers | Same logic — scales with margin |
-| Profit Lock | Same — triggers on pip distance |
-
-## USC vs Standard — Key Differences
-
-| | Standard | USC (Cent) |
-|---|---------|-----------|
-| Balance unit | USD | US Cents (100 USC = $1) |
+| | Standard (STD) | USC (US Cent) |
+|---|---|---|
+| Balance unit | USD | US Cents (100 USC = $1 USD) |
 | $100 deposit | $100 balance | 10,000 USC balance |
-| Min lot meaning | 0.01 lot = ~$1/pip | 0.01 lot = ~1 cent/pip |
-| Risk per trade | Same % logic | Same % logic (just smaller $) |
+| Min lot risk | 0.01 lot ≈ $1/pip | 0.01 lot ≈ $0.01/pip |
+| Risk % logic | Same | Same (scales to cent denomination) |
+| Typical suffix | `-STD` | `-STDc` |
+| Typical server | VTMarkets-Live 5 | VTMarkets-Live 3 |
 
-The bot's risk % logic works identically — 10% of margin is 10% whether it's dollars or cents.
+The bot's lot calculation uses live MT5 tick values (`symbol_info().trade_tick_value`) — it auto-adapts to USD or cent denomination without any code changes.
 
 ---
 
-## Rollback to Standard
+## Troubleshooting
 
-Just change the LIVE credentials back to your Standard account values and set `ENV_MODE=live`. Restart bot.
+| Problem | Fix |
+|---|---|
+| `Symbol XAUUSD not found` | Wrong `MT5_SYMBOL_SUFFIX` — check Market Watch and update `.env` |
+| MT5 login failed | Wrong `MT5_SERVER` — must match exactly (including spaces and capitalisation) |
+| Lot calculated as 0 | Account balance too low for `MIN_LOT` with current `RISK_PERCENT` — lower `RISK_PERCENT` or increase balance |
+| Spread always blocked | USC accounts can have wider spreads — raise `LIVE_MAX_SPREAD_PIPS` to `5` |
+| Wrong account shown in dashboard | `ENV_MODE` mismatch — check `.env` and restart bot |

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DCA Layer Flow — Dynamic Gap + Runway Guard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #0d1117; color: #e6edf3; padding: 30px; }
+  h1 { text-align: center; margin-bottom: 10px; color: #58a6ff; }
+  h2 { color: #58a6ff; margin: 30px 0 15px; border-bottom: 1px solid #30363d; padding-bottom: 8px; }
+  h3 { color: #79c0ff; margin: 20px 0 10px; }
+  .subtitle { text-align: center; color: #8b949e; margin-bottom: 30px; }
+
+  /* ── Price ladder ── */
+  .ladder-wrap { display: flex; gap: 40px; justify-content: center; flex-wrap: wrap; margin: 20px 0; }
+  .ladder { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 25px 30px; width: 380px; }
+  .ladder-title { text-align: center; font-size: 18px; font-weight: 700; margin-bottom: 15px; }
+  .ladder-title.bad { color: #f85149; }
+  .ladder-title.good { color: #3fb950; }
+  .price-line { display: flex; align-items: center; padding: 8px 0; border-left: 3px solid transparent; position: relative; }
+  .price-line .price { width: 90px; font-family: monospace; font-size: 15px; font-weight: 600; text-align: right; margin-right: 15px; }
+  .price-line .label { font-size: 14px; flex: 1; }
+  .price-line .tag { font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 8px; font-weight: 600; }
+
+  .l1 { border-left-color: #58a6ff; }
+  .l2 { border-left-color: #d2a8ff; }
+  .l3 { border-left-color: #f0883e; }
+  .sl-line { border-left-color: #f85149; }
+  .skip { border-left-color: #484f58; opacity: 0.6; }
+
+  .tag-ok { background: #238636; color: #fff; }
+  .tag-dead { background: #da3633; color: #fff; }
+  .tag-skip { background: #484f58; color: #8b949e; }
+  .tag-runway { background: #1f6feb; color: #fff; }
+
+  .gap-bar { display: flex; align-items: center; padding: 2px 0 2px 95px; color: #8b949e; font-size: 12px; }
+  .gap-bar .line { flex: 0 0 20px; border-left: 1px dashed #484f58; height: 20px; margin-right: 8px; }
+
+  /* ── Flow chart ── */
+  .flow { display: flex; flex-direction: column; align-items: center; gap: 0; margin: 20px auto; max-width: 600px; }
+  .flow-box { background: #161b22; border: 2px solid #30363d; border-radius: 10px; padding: 16px 24px; width: 100%; text-align: center; }
+  .flow-box.start { border-color: #58a6ff; background: #0d1117; }
+  .flow-box.check { border-color: #d2a8ff; border-radius: 10px; transform: rotate(0deg); }
+  .flow-box.action { border-color: #3fb950; }
+  .flow-box.skip-box { border-color: #f85149; background: #1a0d0d; }
+  .flow-box.monitor { border-color: #f0883e; }
+  .flow-arrow { font-size: 24px; color: #484f58; line-height: 1; padding: 4px 0; }
+  .flow-label { font-size: 12px; color: #8b949e; }
+  .flow-split { display: flex; width: 100%; gap: 20px; }
+  .flow-split > div { flex: 1; }
+  .flow-branch { display: flex; flex-direction: column; align-items: center; gap: 0; }
+  .yes { color: #3fb950; font-weight: 700; }
+  .no { color: #f85149; font-weight: 700; }
+  .code { font-family: monospace; font-size: 13px; color: #79c0ff; background: #0d1117; padding: 2px 6px; border-radius: 4px; }
+
+  /* ── Table ── */
+  table { width: 100%; max-width: 800px; margin: 15px auto; border-collapse: collapse; }
+  th { background: #161b22; color: #58a6ff; padding: 10px 14px; text-align: center; font-size: 13px; border-bottom: 2px solid #30363d; }
+  td { padding: 10px 14px; text-align: center; border-bottom: 1px solid #21262d; font-size: 14px; }
+  tr:hover td { background: #161b22; }
+  .fire { color: #3fb950; font-weight: 600; }
+  .nope { color: #f85149; font-weight: 600; }
+
+  /* ── Stats ── */
+  .stats { display: flex; gap: 20px; justify-content: center; flex-wrap: wrap; margin: 20px 0; }
+  .stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 20px; text-align: center; min-width: 180px; }
+  .stat-card .num { font-size: 28px; font-weight: 700; }
+  .stat-card .lbl { color: #8b949e; font-size: 13px; margin-top: 5px; }
+  .red { color: #f85149; }
+  .green { color: #3fb950; }
+  .blue { color: #58a6ff; }
+  .purple { color: #d2a8ff; }
+</style>
+</head>
+<body>
+
+<h1>DCA Layer Flow</h1>
+<p class="subtitle">Dynamic Gap + Runway Guard — Approach C</p>
+
+<!-- ══════════ PROBLEM STATS ══════════ -->
+<h2>The Problem (Before Fix)</h2>
+<div class="stats">
+  <div class="stat-card"><div class="num red">0%</div><div class="lbl">L2 Win Rate</div></div>
+  <div class="stat-card"><div class="num red">-$6,013</div><div class="lbl">L2 Total Loss</div></div>
+  <div class="stat-card"><div class="num red">11p avg</div><div class="lbl">L2 Runway to SL</div></div>
+  <div class="stat-card"><div class="num">42</div><div class="lbl">L2 Trades (all lost)</div></div>
+</div>
+
+<!-- ══════════ BEFORE vs AFTER ══════════ -->
+<h2>Before vs After (50p SL, BUY @ 3040)</h2>
+<div class="ladder-wrap">
+
+  <!-- BEFORE -->
+  <div class="ladder">
+    <div class="ladder-title bad">BEFORE (fixed 35p gap)</div>
+    <div class="price-line l1">
+      <span class="price">3040.00</span>
+      <span class="label">L1 entry</span>
+    </div>
+    <div class="gap-bar"><span class="line" style="height:60px"></span> 35 pips gap</div>
+    <div class="price-line l2">
+      <span class="price">3036.50</span>
+      <span class="label">L2 entry</span>
+      <span class="tag tag-dead">15p runway</span>
+    </div>
+    <div class="gap-bar"><span class="line" style="height:20px"></span> 15 pips only!</div>
+    <div class="price-line sl-line">
+      <span class="price">3035.00</span>
+      <span class="label">SL (stop loss)</span>
+      <span class="tag tag-dead">INSTANT STOP</span>
+    </div>
+  </div>
+
+  <!-- AFTER -->
+  <div class="ladder">
+    <div class="ladder-title good">AFTER (dynamic 20p gap)</div>
+    <div class="price-line l1">
+      <span class="price">3040.00</span>
+      <span class="label">L1 entry</span>
+    </div>
+    <div class="gap-bar"><span class="line" style="height:40px"></span> 20 pips gap (50 x 0.40)</div>
+    <div class="price-line l2">
+      <span class="price">3038.00</span>
+      <span class="label">L2 entry</span>
+      <span class="tag tag-ok">30p runway</span>
+    </div>
+    <div class="gap-bar"><span class="line" style="height:50px"></span> 30 pips room to breathe</div>
+    <div class="price-line sl-line">
+      <span class="price">3035.00</span>
+      <span class="label">SL (stop loss)</span>
+    </div>
+    <div class="gap-bar"><span class="line" style="height:10px"></span></div>
+    <div class="price-line skip">
+      <span class="price">3036.00</span>
+      <span class="label">L3 trigger (would be here)</span>
+      <span class="tag tag-skip">SKIPPED 10p</span>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ FLOW CHART ══════════ -->
+<h2>Layer Placement Flow</h2>
+<div class="flow">
+  <div class="flow-box start">
+    <strong>Signal Arrives</strong><br>
+    <span class="code">XAUUSD BUY, SL = 50 pips</span>
+  </div>
+  <div class="flow-arrow">▼</div>
+
+  <div class="flow-box check">
+    <strong>Calculate Dynamic Gap</strong><br>
+    <span class="code">gap = SL x L2_GAP_RATIO = 50 x 0.40 = 20p</span><br>
+    <span class="flow-label">If L2_GAP_RATIO=0, fallback to fixed LAYER2_PIPS=35</span>
+  </div>
+  <div class="flow-arrow">▼</div>
+
+  <div class="flow-box check">
+    <strong>SL Safety Cap</strong><br>
+    <span class="code">safe_steps = (50-1) / 20 = 2 → max 3 layers</span>
+  </div>
+  <div class="flow-arrow">▼</div>
+
+  <div class="flow-box action">
+    <strong>L1: Price in Zone?</strong><br>
+    proximity ≤ 50p → <span class="yes">PLACE L1 @ market</span>
+  </div>
+  <div class="flow-arrow">▼</div>
+
+  <div class="flow-box check" style="border-color: #f0883e;">
+    <strong>L2 Trigger: price dropped 20p from L1?</strong>
+  </div>
+  <div class="flow-arrow">▼</div>
+
+  <div class="flow-box check">
+    <strong>Guard 1: Beyond SL?</strong><br>
+    <span class="code">trigger (3038) > SL (3035)?</span> → <span class="yes">NO, continue</span>
+  </div>
+  <div class="flow-arrow">▼</div>
+
+  <div class="flow-box check" style="border-color: #1f6feb; background: #0d1926;">
+    <strong style="color: #58a6ff;">Guard 2: RUNWAY GUARD (NEW)</strong><br>
+    <span class="code">runway = |3038 - 3035| / 0.1 = 30 pips</span><br><br>
+    <span class="code">30p ≥ 25p (L2_MIN_RUNWAY_PIPS)?</span> → <span class="yes">YES, proceed</span>
+  </div>
+  <div class="flow-arrow">▼</div>
+
+  <div class="flow-box action">
+    <strong>PLACE L2</strong> @ 3038.00 with 30p runway
+  </div>
+  <div class="flow-arrow">▼</div>
+
+  <div class="flow-box check" style="border-color: #f0883e;">
+    <strong>L3 Trigger: price dropped 40p from L1?</strong><br>
+    <span class="code">trigger = 3036.00</span>
+  </div>
+  <div class="flow-arrow">▼</div>
+
+  <div class="flow-box skip-box">
+    <strong>RUNWAY GUARD → SKIP</strong><br>
+    <span class="code">runway = |3036 - 3035| / 0.1 = 10p</span><br>
+    <span class="code">10p < 25p</span> → <span class="no">SKIPPED, not worth the risk</span><br>
+    <span class="flow-label">Telegram: "L3 skipped — runway 10p < 25p"</span>
+  </div>
+  <div class="flow-arrow">▼</div>
+
+  <div class="flow-box monitor">
+    <strong>MONITORING</strong><br>
+    Watch L1 + L2 for TP hits / stop-outs
+  </div>
+</div>
+
+<!-- ══════════ DECISION TABLE ══════════ -->
+<h2>Decision Matrix by SL Size</h2>
+<table>
+  <tr>
+    <th>Signal SL</th>
+    <th>Gap (x0.40)</th>
+    <th>L2 Depth</th>
+    <th>L2 Runway</th>
+    <th>L2 Status</th>
+    <th>L3 Runway</th>
+    <th>L3 Status</th>
+  </tr>
+  <tr>
+    <td>40p</td><td>16p</td><td>16p</td><td>24p</td>
+    <td class="nope">SKIPPED</td><td>8p</td><td class="nope">SKIPPED</td>
+  </tr>
+  <tr>
+    <td>45p</td><td>18p</td><td>18p</td><td>27p</td>
+    <td class="fire">FIRES</td><td>9p</td><td class="nope">SKIPPED</td>
+  </tr>
+  <tr style="background: #0d1926;">
+    <td><strong>50p</strong></td><td><strong>20p</strong></td><td><strong>20p</strong></td><td><strong>30p</strong></td>
+    <td class="fire"><strong>FIRES</strong></td><td><strong>10p</strong></td><td class="nope"><strong>SKIPPED</strong></td>
+  </tr>
+  <tr>
+    <td>60p</td><td>24p</td><td>24p</td><td>36p</td>
+    <td class="fire">FIRES</td><td>12p</td><td class="nope">SKIPPED</td>
+  </tr>
+  <tr>
+    <td>70p</td><td>28p</td><td>28p</td><td>42p</td>
+    <td class="fire">FIRES</td><td>14p</td><td class="nope">SKIPPED</td>
+  </tr>
+  <tr>
+    <td>100p</td><td>40p</td><td>40p</td><td>60p</td>
+    <td class="fire">FIRES</td><td>20p</td><td class="nope">SKIPPED</td>
+  </tr>
+  <tr>
+    <td>130p</td><td>52p</td><td>52p</td><td>78p</td>
+    <td class="fire">FIRES</td><td>26p</td><td class="fire">FIRES</td>
+  </tr>
+</table>
+<p style="text-align:center; color:#8b949e; margin-top:8px;">
+  Highlighted row = Hafiz's typical 50p SL signal. L1 + L2 only. L3 auto-skipped.
+</p>
+
+<!-- ══════════ CONFIG ══════════ -->
+<h2>Config (.env)</h2>
+<div style="background:#161b22; border:1px solid #30363d; border-radius:10px; padding:20px; max-width:600px; margin:0 auto; font-family:monospace; font-size:14px; line-height:1.8;">
+  <span style="color:#8b949e;"># Dynamic L2 gap (0 = fallback to fixed LAYER2_PIPS)</span><br>
+  <span style="color:#79c0ff;">L2_GAP_RATIO</span>=<span style="color:#3fb950;">0.40</span><br><br>
+  <span style="color:#8b949e;"># Min runway to SL before layer fires</span><br>
+  <span style="color:#79c0ff;">L2_MIN_RUNWAY_PIPS</span>=<span style="color:#3fb950;">25</span><br><br>
+  <span style="color:#8b949e;"># Legacy fixed gap (used when L2_GAP_RATIO=0)</span><br>
+  <span style="color:#79c0ff;">LAYER2_PIPS</span>=<span style="color:#484f58;">35</span>
+</div>
+
+</body>
+</html>
