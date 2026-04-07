@@ -38,9 +38,9 @@ from core.config import (
     MT5_SYMBOL_SUFFIX, SL_PIP_SIZE, ENTRY_MAX_DISTANCE_PIPS,
     LAYER_COUNT, LAYER2_PIPS, MIN_LOT, MAX_SUB_SPLITS,
     SL_MIN_PIPS, TP_ENFORCE_PIPS, L2_GAP_RATIO, L2_MIN_RUNWAY_PIPS,
-    L1_LOT_RATIO,
+    L1_LOT_RATIO, PROFIT_LOCK_ENABLED, PROFIT_LOCK_PIPS, PROFIT_LOCK_TP_PIPS,
 )
-from core.mt5   import mt5_connect, execute_trade, set_breakeven
+from core.mt5   import mt5_connect, execute_trade, set_breakeven, modify_sl_tp
 from core.risk  import calculate_lot
 from core.state import pending
 from core.db    import upsert_signal
@@ -60,9 +60,10 @@ class LayerSession:
     effective_tps:  list
     sub_lots:       list          # sub-order lot per layer  [L1_sub, L2_sub, ...]
     tp_splits:      list          # sub-order count per layer [L1_splits, L2_splits, ...]
-    tickets: list = field(default_factory=list)   # list[list[int]] — sub-tickets per layer
-    entries: list = field(default_factory=list)   # float|None per layer
-    state:   str  = "WAIT_L1"
+    tickets:        list = field(default_factory=list)   # list[list[int]] — sub-tickets per layer
+    entries:        list = field(default_factory=list)   # float|None per layer
+    locked_tickets: set  = field(default_factory=set)   # tickets already profit-locked
+    state:          str  = "WAIT_L1"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -207,6 +208,81 @@ async def _notify(bot, text: str):
         log.warning(f"LayerWatcher _notify failed: {e}")
 
 
+async def _check_profit_lock(session: "LayerSession", bot) -> None:
+    """
+    For every open sub-order not yet locked:
+      if profit >= PROFIT_LOCK_PIPS → move SL to breakeven, tighten TP to PROFIT_LOCK_TP_PIPS.
+    Sends one Telegram notification per batch of locks triggered this cycle.
+    """
+    if not PROFIT_LOCK_ENABLED:
+        return
+
+    placed_tickets = [t for sub in session.tickets for t in sub]
+    if not placed_tickets:
+        return
+
+    unlocked = [t for t in placed_tickets if t not in session.locked_tickets]
+    if not unlocked:
+        return
+
+    if not mt5_connect():
+        return
+
+    positions = {p.ticket: p for p in (mt5.positions_get() or [])}
+    mt5.shutdown()
+
+    signal = session.signal
+    locked_this_cycle = []
+
+    for ticket in unlocked:
+        pos = positions.get(ticket)
+        if pos is None:
+            continue
+
+        profit_pips = (
+            (pos.price_open - pos.price_current) / SL_PIP_SIZE
+            if signal.direction == "sell"
+            else (pos.price_current - pos.price_open) / SL_PIP_SIZE
+        )
+
+        if profit_pips < PROFIT_LOCK_PIPS:
+            continue
+
+        new_sl = pos.price_open
+        if PROFIT_LOCK_TP_PIPS > 0:
+            new_tp = round(
+                pos.price_open - PROFIT_LOCK_TP_PIPS * SL_PIP_SIZE
+                if signal.direction == "sell"
+                else pos.price_open + PROFIT_LOCK_TP_PIPS * SL_PIP_SIZE,
+                2
+            )
+        else:
+            new_tp = pos.tp
+
+        result = modify_sl_tp(ticket, new_sl=new_sl, new_tp=new_tp)
+        if "❌" not in result:
+            session.locked_tickets.add(ticket)
+            locked_this_cycle.append((ticket, profit_pips, new_tp))
+            log.info(
+                f"ProfitLock [{session.signal_id}]: #{ticket} "
+                f"{profit_pips:.0f}p profit → SL=BE TP={new_tp}"
+            )
+        else:
+            log.warning(f"ProfitLock [{session.signal_id}]: #{ticket} modify failed: {result}")
+
+    if locked_this_cycle:
+        lines = "\n".join(
+            f"  `#{t}` — `{p:.0f}p` profit → TP `{tp}`"
+            for t, p, tp in locked_this_cycle
+        )
+        await _notify(bot, (
+            f"🔒 *Profit Lock — {len(locked_this_cycle)} position(s) secured!*\n"
+            f"`{signal.symbol} {signal.direction.upper()}`\n"
+            f"{lines}\n"
+            f"_SL moved to breakeven | TP tightened to {PROFIT_LOCK_TP_PIPS}p_"
+        ))
+
+
 # ── Main watcher coroutine ────────────────────────────────────────────────────
 
 async def watch_layered_entry(signal, signal_id: str, bot,
@@ -325,6 +401,10 @@ async def watch_layered_entry(signal, signal_id: str, bot,
         )
 
         placed_tickets = [t for sub in session.tickets for t in sub]
+
+        # ── Profit lock — secure positions at +50 pips ────────────────────────
+        if placed_tickets:
+            await _check_profit_lock(session, bot)
 
         # ── Check for stop-outs on placed layers ──────────────────────────────
         if placed_tickets:
