@@ -105,6 +105,16 @@ def execute_trade(signal: Signal, signal_id: str = None,
                 f"_3:00 PM–5:00 AM MYT (London + NY only)_"
             )
 
+    # ── GUARD X: Max daily loss circuit breaker ───────────────────────────────
+    if MAX_DAILY_LOSS_USD > 0:
+        from core.state import get_daily_loss
+        if get_daily_loss() >= MAX_DAILY_LOSS_USD:
+            return (
+                f"🛑 *Trading blocked — daily loss limit reached*\n"
+                f"Today's loss: `${get_daily_loss():.2f}` | Limit: `$MAX_DAILY_LOSS_USD`\n"
+                f"_Wait for reset at midnight or close some positions._"
+            )
+
     if not mt5_connect():
         return "❌ Could not connect to MT5."
 
@@ -152,6 +162,17 @@ def execute_trade(signal: Signal, signal_id: str = None,
                 f"Stacking same direction doubles your exposure.\n"
                 f"_Close existing trades or move them to breakeven first._"
             )
+        # Check own DCA layers count limit
+        if own_tickets and MAX_DCA_LAYERS_PER_SYMBOL > 0:
+            own_layers = len(own_tickets)
+            if own_layers >= MAX_DCA_LAYERS_PER_SYMBOL:
+                mt5.shutdown()
+                return (
+                    f"⚠️ *Trade blocked — DCA layer limit reached*\n"
+                    f"Already have {own_layers} layer(s) for this signal. "
+                    f"Max: {MAX_DCA_LAYERS_PER_SYMBOL}\n"
+                    f"_Wait for some layers to close before adding more._"
+                )
 
     # ── GUARD 4: Auto-adjust TP + RR ratio check ─────────────────────────────
     sl_distance  = abs(signal.entry_mid - signal.sl)

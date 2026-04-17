@@ -8,7 +8,7 @@ The bot supports four account configurations. All switching is done via `.env` o
 |---|---|---|---|
 | Demo STD (testing) | `demo` | `DEMO_MT5_*` | #1067995 — VTMarkets-Demo |
 | Live STD (standard USD) | `live` | `LIVE_MT5_*` | — (not set up yet) |
-| Live USC (US Cent) | `live` | `LIVE_MT5_*` | #26578318 — VTMarkets-Live 3 |
+| Live USC (US Cent) | `live` | `LIVE_MT5_*` | #26578318 — VTMarkets-Live3 |
 
 ---
 
@@ -25,7 +25,7 @@ DEMO_MAX_SPREAD_PIPS=5
 
 LIVE_MT5_LOGIN=26578318              # USC live account
 LIVE_MT5_PASSWORD=321Trade!@
-LIVE_MT5_SERVER=VTMarkets-Live 3
+LIVE_MT5_SERVER=VTMarkets-Live3
 LIVE_MT5_SYMBOL_SUFFIX=-STDc         # USC/cent suffix
 LIVE_MAX_SPREAD_PIPS=5
 ```
@@ -34,7 +34,7 @@ LIVE_MAX_SPREAD_PIPS=5
 
 ## Scenario 1 — Switch Demo → Live USC
 
-1. Log into account `#26578318` in MT5 terminal (server: `VTMarkets-Live 3`)
+1. Log into account `#26578318` in MT5 terminal (server: `VTMarkets-Live3`)
 2. Update `.env`:
    ```env
    ENV_MODE=live
@@ -67,14 +67,14 @@ When you get a Standard (USD) live account from VT Markets:
 
 ## Scenario 3 — Switch Live STD → Live USC (rollback)
 
-1. Log into account `#26578318` in MT5 terminal (server: `VTMarkets-Live 3`)
+1. Log into account `#26578318` in MT5 terminal (server: `VTMarkets-Live3`)
 2. Update `.env`:
    ```env
    ENV_MODE=live
 
    LIVE_MT5_LOGIN=26578318
    LIVE_MT5_PASSWORD=321Trade!@
-   LIVE_MT5_SERVER=VTMarkets-Live 3
+   LIVE_MT5_SERVER=VTMarkets-Live3
    LIVE_MT5_SYMBOL_SUFFIX=-STDc
    LIVE_MAX_SPREAD_PIPS=5
    ```
@@ -117,7 +117,7 @@ If XAUUSD is not visible in Market Watch, right-click → Show All, then search 
 | Min lot risk | 0.01 lot ≈ $1/pip | 0.01 lot ≈ $0.01/pip |
 | Risk % logic | Same | Same (scales to cent denomination) |
 | Typical suffix | `-STD` | `-STDc` |
-| Typical server | VTMarkets-Live 5 | VTMarkets-Live 3 |
+| Typical server | VTMarkets-Live 5 | VTMarkets-Live3 |
 
 The bot's lot calculation uses live MT5 tick values (`symbol_info().trade_tick_value`) — it auto-adapts to USD or cent denomination without any code changes.
 

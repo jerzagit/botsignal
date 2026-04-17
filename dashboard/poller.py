@@ -13,6 +13,7 @@ import MetaTrader5 as mt5
 
 from core.db  import get_conn, update_trade_outcome, ensure_manual_trade
 from core.mt5 import mt5_connect
+from core.state import add_daily_loss
 from core.config import (
     MT5_SYMBOL_SUFFIX, SL_PIP_SIZE,
     PROFIT_LOCK_ENABLED, PROFIT_LOCK_PIPS, PROFIT_LOCK_TP_PIPS,
@@ -83,6 +84,11 @@ def check_ticket(ticket: int):
         f"Poller: ticket={ticket} closed -> {outcome} "
         f"@ {close_price}  profit={profit:.2f}"
     )
+    
+    # Track daily loss
+    if profit < 0:
+        from core.state import add_daily_loss
+        add_daily_loss(abs(profit))
 
 
 def get_known_tickets() -> set:

@@ -115,6 +115,10 @@ SESSION_FILTER_ENABLED  = os.getenv("SESSION_FILTER_ENABLED", "true").lower() ==
 SESSION_START_HOUR_UTC  = int(os.getenv("SESSION_START_HOUR_UTC", "7"))   # 07:00 UTC = 3pm MYT
 SESSION_END_HOUR_UTC    = int(os.getenv("SESSION_END_HOUR_UTC",   "21"))  # 21:00 UTC = 5am MYT
 
+# ── Max loss per day circuit breaker ───────────────────────────────────────────
+MAX_DAILY_LOSS_USD      = int(os.getenv("MAX_DAILY_LOSS_USD", "50"))   # stop trading if loss exceeds this
+MAX_DCA_LAYERS_PER_SYMBOL = int(os.getenv("MAX_DCA_LAYERS_PER_SYMBOL", "3"))  # max DCA layers per symbol
+
 # ── AutoZone (auto-entry from SNR/SND mapped zones) ─────────────────────────
 MAP_ENABLED = os.getenv("MAP_ENABLED", "true").lower() == "true"
 

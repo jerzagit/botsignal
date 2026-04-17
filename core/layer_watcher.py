@@ -351,11 +351,13 @@ async def _trail_stops(session: "LayerSession", bot) -> None:
 # ── Main watcher coroutine ────────────────────────────────────────────────────
 
 async def watch_layered_entry(signal, signal_id: str, bot,
-                              entry_mode: str = "layered_dca"):
+                              entry_mode: str = "layered_dca",
+                              skip_proximity: bool = False):
     """
     DCA-style layered entry — runs as an asyncio background task.
     Places N layers as price dips deeper, then monitors for TP -> BE.
     entry_mode: 'layered_dca' (signal-based) or 'mapped' (zone auto-entry).
+    skip_proximity: if True, execute immediately without waiting for price to enter zone.
     """
     symbol   = signal.symbol + MT5_SYMBOL_SUFFIX
     deadline = signal.created_at + SIGNAL_EXPIRY
@@ -577,9 +579,12 @@ async def watch_layered_entry(signal, signal_id: str, bot,
             should_place = False
             if price is not None:
                 if next_idx == 0:
-                    # L1: standard proximity guard (enter zone)
-                    dist = max(0.0, max(signal.entry_low - price, price - signal.entry_high))
-                    should_place = (dist / SL_PIP_SIZE) <= ENTRY_MAX_DISTANCE_PIPS
+                    # L1: standard proximity guard (enter zone) or skip for immediate execution
+                    if skip_proximity:
+                        should_place = True
+                    else:
+                        dist = max(0.0, max(signal.entry_low - price, price - signal.entry_high))
+                        should_place = (dist / SL_PIP_SIZE) <= ENTRY_MAX_DISTANCE_PIPS
                 else:
                     # L2+: price dipped N×LAYER2_PIPS from L1 entry
                     trigger = _layer_trigger_price(signal, session.entries[0], next_idx)
@@ -600,7 +605,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                         await asyncio.sleep(WATCH_INTERVAL_SECS)
                         continue
 
-                    # ── Runway guard: skip if trigger too close to SL ──
+                    # ── Runway guard: block if trigger too close to SL ──
                     runway_pips = abs(trigger - signal.sl) / SL_PIP_SIZE
                     if runway_pips < L2_MIN_RUNWAY_PIPS:
                         _lnum = next_idx + 1
