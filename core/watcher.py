@@ -42,10 +42,11 @@ def _get_price(symbol: str, direction: str):
     return tick.ask if direction == "buy" else tick.bid
 
 
-async def watch_and_execute(signal, signal_id: str, bot):
+async def watch_and_execute(signal, signal_id: str, bot, skip_proximity: bool = False):
     """
     Watch price every WATCH_INTERVAL_SECS seconds.
     Auto-executes when price enters the entry zone within SIGNAL_EXPIRY.
+    skip_proximity: if True, execute immediately without waiting for price to enter zone.
     """
     symbol   = signal.symbol + MT5_SYMBOL_SUFFIX
     deadline = signal.created_at + SIGNAL_EXPIRY
@@ -82,7 +83,7 @@ async def watch_and_execute(signal, signal_id: str, bot):
                 f"distance={distance_pips:.0f} pips from zone"
             )
 
-            if distance_pips <= ENTRY_MAX_DISTANCE_PIPS:
+            if skip_proximity or distance_pips <= ENTRY_MAX_DISTANCE_PIPS:
                 # ── Price is in zone — attempt execution ──────────────────────
                 log.info(
                     f"Watcher [{signal_id}]: price {price} entered zone "
@@ -91,7 +92,7 @@ async def watch_and_execute(signal, signal_id: str, bot):
                 pending.pop(signal_id, None)
 
                 result = await asyncio.get_event_loop().run_in_executor(
-                    None, execute_trade, signal, signal_id
+                    None, execute_trade, signal, signal_id, None, None, None, skip_proximity, "manual", None, True, True, True, True
                 )
 
                 if "Trade Executed" in result:

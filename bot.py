@@ -1,15 +1,9 @@
-"""
-SignalBot — Entry point
-Starts Telethon listener + Telegram bot confirmation system.
-Run: python bot.py
-"""
-
 import os
 import asyncio
 import logging
 import sys
+import time
 
-# Fix Windows cp1252 encoding crash on emoji/unicode in logs
 if sys.stdout.encoding != "utf-8":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -27,7 +21,7 @@ from core.config       import YOUR_CHAT_ID, ENV_MODE, MAP_ENABLED, TREND_ENABLED
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s %(message)s",
     handlers=[
         logging.FileHandler("logs/bot.log"),
         logging.StreamHandler()
@@ -36,10 +30,37 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 PID_FILE = Path("data/bot.pid")
+STARTUP_FILE = Path("data/startup.timestamp")
+STARTUP_COOLDOWN = 60  # seconds to wait before processing commands after restart
+
+
+def _check_running_bots() -> list:
+    """Check for any running SignalBot processes (excluding current)."""
+    import subprocess
+    bots = []
+    current_pid = os.getpid()
+    try:
+        result = subprocess.run(
+            ["wmic", "process", "where", "name='python.exe'", "get", "ProcessId,CommandLine"],
+            capture_output=True, text=True, timeout=10
+        )
+        for line in result.stdout.strip().split('\n'):
+            if 'python' in line.lower() and 'bot.py' in line.lower():
+                # Extract PID from line
+                parts = line.strip().split()
+                if parts:
+                    try:
+                        pid = int(parts[-1])
+                        if pid != current_pid:  # Exclude current process
+                            bots.append(line)
+                    except:
+                        pass
+    except Exception:
+        pass
+    return bots
 
 
 def _pid_alive(pid: int) -> bool:
-    """Check if a process with given PID is still running (Windows)."""
     try:
         result = subprocess.run(
             ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
@@ -51,108 +72,112 @@ def _pid_alive(pid: int) -> bool:
 
 
 def acquire_lock() -> bool:
-    """Write PID lock file. Returns False if another instance is already running."""
+    """Check for running bots and acquire lock."""
+    # Check for any running bot first
+    running = _check_running_bots()
+    if running:
+        print(f"\nFound {len(running)} running bot process(es):")
+        for r in running[:3]:
+            print(f"  {r}")
+        print("\nPlease close other bot process(es) before starting.")
+        return False
+    
+    # Check PID file
     PID_FILE.parent.mkdir(exist_ok=True)
     if PID_FILE.exists():
         try:
             old_pid = int(PID_FILE.read_text().strip())
             if _pid_alive(old_pid):
-                print(f"\n❌ Another SignalBot is already running (PID {old_pid}).")
-                print(f"   Stop it first, then run bot.py again.")
-                print(f"   To force kill: taskkill /PID {old_pid} /F\n")
+                print(f"\nSignalBot is already running (PID {old_pid}).")
                 return False
+            else:
+                print(f"\nStale lock file found (PID {old_pid}), replacing.")
         except Exception:
             pass
-        PID_FILE.unlink(missing_ok=True)
 
+    # Write new PID
     PID_FILE.write_text(str(os.getpid()))
+    
+    # Write startup timestamp for cooldown
+    STARTUP_FILE.parent.mkdir(exist_ok=True)
+    STARTUP_FILE.write_text(str(int(time.time())))
+    
     return True
 
 
-def release_lock():
-    PID_FILE.unlink(missing_ok=True)
-
-
-async def main():
-    env_label = "LIVE" if ENV_MODE == "live" else "DEMO (UAT)"
-    log.info(f"=== SignalBot starting === Environment: {env_label}")
-
-    # Quick MT5 sanity check on startup
-    ok, msg = mt5_connect_test()
-    log.info(f"MT5 check: {msg}")
-
-    tasks = [
-        start_notifier(),   # Telegram bot — handles button taps
-        start_listener(),   # Telethon — watches mentor's group as your account
-    ]
-
-    if MAP_ENABLED:
-        async def _delayed_map_watcher():
-            """Wait briefly for notifier to initialize, then start map watcher."""
-            await asyncio.sleep(3)
-            bot = get_bot()
-            await start_map_watcher(bot)
-
-        tasks.append(_delayed_map_watcher())
-        log.info("AutoZone enabled — watcher will start after notifier init")
-
-    if TREND_ENABLED:
-        from core.trend_analyzer import start_trend_watcher
-
-        async def _delayed_trend_watcher():
-            """Wait briefly for notifier to initialize, then start trend watcher."""
-            await asyncio.sleep(3)
-            bot = get_bot()
-            await start_trend_watcher(bot)
-
-        tasks.append(_delayed_trend_watcher())
-        log.info("Trend analyzer enabled — watcher will start after notifier init")
-
-    if FIB_SCANNER_ENABLED:
-        from core.trend_analyzer import start_fib_scanner
-
-        async def _delayed_fib_scanner():
-            """Wait briefly for notifier to initialize, then start Fib scanner."""
-            await asyncio.sleep(3)
-            bot = get_bot()
-            await start_fib_scanner(bot)
-
-        tasks.append(_delayed_fib_scanner())
-        log.info("Fib entry scanner enabled — will start after notifier init")
-
-    await asyncio.gather(*tasks)
-
-
-async def on_shutdown():
-    """Notify you when bot stops. Positions are LEFT OPEN — SL/TP still active."""
-    log.info("Bot stopped — open positions remain active in MT5 (SL/TP still live).")
+def get_startup_timestamp() -> int:
+    """Get the timestamp when bot was last started."""
     try:
-        bot = get_bot()
-        await bot.send_message(
-            chat_id=YOUR_CHAT_ID,
-            text=(
-                "🛑 *SignalBot stopped*\n\n"
-                "⚠️ Open positions are still running in MT5.\n"
-                "SL and TP remain active on the broker — trades will close automatically.\n\n"
-                "_Restart bot.py to resume signal monitoring._"
-            ),
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        log.error(f"Could not send shutdown notification: {e}")
+        if STARTUP_FILE.exists():
+            return int(STARTUP_FILE.read_text().strip())
+    except Exception:
+        pass
+    return 0
 
 
-if __name__ == "__main__":
+async def check_startup_cooldown() -> bool:
+    """
+    Check if bot recently started. Returns True if commands should be blocked (within cooldown).
+    Use this before processing any trade commands.
+    """
+    startup_time = get_startup_timestamp()
+    if startup_time == 0:
+        return False
+    
+    elapsed = int(time.time()) - startup_time
+    if elapsed < STARTUP_COOLDOWN:
+        log.warning(f"Startup cooldown: {elapsed}s / {STARTUP_COOLDOWN}s — blocking command")
+        return True
+    return False
+
+
+def reset_startup_cooldown():
+    """Reset the startup timestamp to prevent stale blocking."""
+    try:
+        STARTUP_FILE.write_text("0")
+    except Exception:
+        pass
+
+
+def _run():
+    log.info("SignalBot starting...")
+    
     if not acquire_lock():
         sys.exit(1)
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    # Test MT5 connection
+    if not mt5_connect_test():
+        log.error("MT5 connection failed.")
+        sys.exit(1)
+
+    # Start notifier (Telegram bot)
+    bot_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(bot_loop)
+    bot = bot_loop.run_until_complete(start_notifier())
+    
+    from telegram.ext import ApplicationBuilder
+    
+    app = ApplicationBuilder().token(os.getenv("BOT_TOKEN")).build()
+    
+    async def post_init(app):
+        if MAP_ENABLED:
+            await start_map_watcher(bot)
+        if TREND_ENABLED:
+            from core.trend_analyzer import start_trend
+            await start_trend(bot)
+    
+    app.post_init = post_init
+    
+    log.info("Bot ready!")
+    bot_loop.run_until_complete(app.run_polling())
+    bot_loop.run_until_complete(bot.session.stop())
+
+
+if __name__ == "__main__":
     try:
-        loop.run_until_complete(main())
-    except KeyboardInterrupt:
-        log.info("KeyboardInterrupt — shutting down")
-        loop.run_until_complete(on_shutdown())
+        _run()
     finally:
-        release_lock()
-        loop.close()
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+        if STARTUP_FILE.exists():
+            STARTUP_FILE.unlink()

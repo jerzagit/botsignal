@@ -13,9 +13,10 @@ import MetaTrader5 as mt5
 
 from core.config import MT5_PATH, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_SYMBOL_SUFFIX, \
                        SL_PIP_SIZE, ENTRY_MAX_DISTANCE_PIPS, MIN_MARGIN_LEVEL, \
-                       MAX_SPREAD_PIPS, MIN_RR_RATIO, BLOCK_SAME_DIRECTION_STACK, \
+                       MAX_SPREAD_PIPS, MIN_RR_RATIO, BLOCK_SAME_DIRECTION_STACK, STACK_MODE, \
                        TRADE_SPLIT, MIN_LOT, SL_MIN_PIPS, TP_ENFORCE_PIPS, \
-                       SESSION_FILTER_ENABLED, SESSION_START_HOUR_UTC, SESSION_END_HOUR_UTC
+                       SESSION_FILTER_ENABLED, SESSION_START_HOUR_UTC, SESSION_END_HOUR_UTC, \
+                       MAX_DAILY_LOSS_USD
 from core.signal import Signal
 from core.risk   import calculate_lot
 
@@ -74,7 +75,10 @@ def execute_trade(signal: Signal, signal_id: str = None,
                   entry_mode: str = None,
                   layer_num: int = None,
                   skip_rr_check: bool = False,
-                  skip_session: bool = False) -> str:
+                  skip_session: bool = False,
+                  skip_stack_check: bool = False,
+                  skip_spread_check: bool = False,
+                  risk_percent: float = None) -> str:
     """
     Place a market order on MT5 for the given signal.
 
@@ -142,27 +146,33 @@ def execute_trade(signal: Signal, signal_id: str = None,
     # ── GUARD 3: Same-direction stack — don't double up on small account ─────
     # Exception: positions already at breakeven (SL == entry price) are free
     # trades — no capital at risk, so new entries are allowed alongside them.
-    if BLOCK_SAME_DIRECTION_STACK:
+    stack_reduced = False
+    if BLOCK_SAME_DIRECTION_STACK and not skip_stack_check:
         existing  = mt5.positions_get(symbol=symbol) or []
         same_type = mt5.ORDER_TYPE_BUY if signal.direction == "buy" else mt5.ORDER_TYPE_SELL
         stacked   = [p for p in existing if p.type == same_type]
-        # Exempt our own layer positions from the stack check
         if own_tickets:
             stacked = [p for p in stacked if p.ticket not in own_tickets]
-        # Filter out breakeven positions (SL moved to entry price)
         at_risk   = [p for p in stacked if round(p.sl, 2) != round(p.price_open, 2)]
         if at_risk:
-            _fire_guard("stack", signal, signal_id,
-                        f"{len(at_risk)} same-direction position(s) at risk",
-                        f"{len(at_risk)} at risk", "0 at risk")
-            mt5.shutdown()
-            return (
-                f"⚠️ *Trade blocked — already have {len(at_risk)} "
-                f"{signal.direction.upper()} position(s) at risk on `{symbol}`*\n"
-                f"Stacking same direction doubles your exposure.\n"
-                f"_Close existing trades or move them to breakeven first._"
-            )
-        # Check own DCA layers count limit
+            if STACK_MODE == "reduce":
+                existing_lot = sum(p.volume for p in at_risk)
+                log.info(
+                    f"Stack reduce: {len(at_risk)} existing position(s) at risk "
+                    f"(lot={existing_lot}) — will reduce new lot accordingly"
+                )
+                stack_reduced = True
+            else:
+                _fire_guard("stack", signal, signal_id,
+                            f"{len(at_risk)} same-direction position(s) at risk",
+                            f"{len(at_risk)} at risk", "0 at risk")
+                mt5.shutdown()
+                return (
+                    f"⚠️ *Trade blocked — already have {len(at_risk)} "
+                    f"{signal.direction.upper()} position(s) at risk on `{symbol}`*\n"
+                    f"Stacking same direction doubles your exposure.\n"
+                    f"_Close existing trades or move them to breakeven first._"
+                )
         if own_tickets and MAX_DCA_LAYERS_PER_SYMBOL > 0:
             own_layers = len(own_tickets)
             if own_layers >= MAX_DCA_LAYERS_PER_SYMBOL:
@@ -235,18 +245,21 @@ def execute_trade(signal: Signal, signal_id: str = None,
     price      = tick.ask if signal.direction == "buy" else tick.bid
     tp         = signal.tps[0]
 
-    # ── GUARD 5: Spread — block if broker spread is unusually wide ───────────
+    # ── GUARD 5: Spread warning — warn if broker spread is unusually wide (not blocking for manual) ───────────
     spread_pips = (tick.ask - tick.bid) / SL_PIP_SIZE
+    spread_warn = ""
     if spread_pips > MAX_SPREAD_PIPS:
-        _fire_guard("spread", signal, signal_id,
-                    "Spread too wide",
-                    f"{spread_pips:.1f} pips", f"≤{MAX_SPREAD_PIPS:.0f} pips")
-        mt5.shutdown()
-        return (
-            f"⏳ *Trade blocked — spread too wide*\n"
-            f"Current spread: `{spread_pips:.1f} pips` | Max allowed: `{MAX_SPREAD_PIPS:.0f} pips`\n"
-            f"_Likely news event or off-hours. Wait for spread to normalise._"
-        )
+        spread_warn = f"⚠️ Spread: {spread_pips:.1f}p (max {MAX_SPREAD_PIPS:.0f}p)"
+        if not skip_spread_check:
+            _fire_guard("spread", signal, signal_id,
+                        "Spread too wide",
+                        f"{spread_pips:.1f} pips", f"≤{MAX_SPREAD_PIPS:.0f} pips")
+            mt5.shutdown()
+            return (
+                f"⏳ *Trade blocked — spread too wide*\n"
+                f"Current spread: `{spread_pips:.1f} pips` | Max allowed: `{MAX_SPREAD_PIPS:.0f} pips`\n"
+                f"_Likely news event or off-hours. Wait for spread to normalise._"
+            )
 
     # ── GUARD 6: Entry proximity — price must be near Hafiz's entry zone ─────
     # Skipped for L2+ layers (they are intentionally outside zone by design)
@@ -275,7 +288,26 @@ def execute_trade(signal: Signal, signal_id: str = None,
         lot = lot_override
         lot_explanation = f"📦 Lot: `{lot}` (layer)"
     else:
-        lot, lot_explanation = calculate_lot(signal)
+        if stack_reduced:
+            lot, lot_explanation = calculate_lot(signal, risk_override=risk_percent)
+            if lot <= existing_lot:
+                mt5.shutdown()
+                return (
+                    f"⚠️ *Trade skipped — existing position already uses full risk budget*\n"
+                    f"Existing lot: `{existing_lot}` | Calculated new lot: `{lot}`\n"
+                    f"_Close or breakeven the existing position before adding more._"
+                )
+            lot = max(MIN_LOT, round(lot - existing_lot, 2))
+            lot_explanation = (
+                f"📦 Lot: `{lot}` (reduced from `{lot + existing_lot:.2f}` — "
+                f"`{existing_lot}` already at risk)\n"
+            )
+            log.info(
+                f"Stack reduce: raw={lot + existing_lot:.2f} - existing={existing_lot} -> "
+                f"new_lot={lot}"
+            )
+        else:
+            lot, lot_explanation = calculate_lot(signal, risk_override=risk_percent)
     if lot == 0.0:
         _fire_guard("lot_calc", signal, signal_id,
                     lot_explanation, "0.00 lot", f"≥{MIN_LOT}")

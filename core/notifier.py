@@ -19,6 +19,7 @@ from core.config import (
     MANUAL_SL_PIPS, MANUAL_TP1_PIPS, MANUAL_TP2_PIPS, MANUAL_SYMBOL,
     MT5_SYMBOL_SUFFIX, TREND_ENABLED, FIB_GUARD_ENABLED, FIB_SCANNER_ENABLED,
     MANUAL_RISK_PERCENT,
+    GOLD_SL_PIPS, GOLD_TP1_PIPS, GOLD_TP2_PIPS,
 )
 from core.signal import Signal
 from core.state  import pending, pending_closes
@@ -33,7 +34,6 @@ from core.db     import (
 log = logging.getLogger(__name__)
 
 _app: Application = None   # shared app instance
-
 
 def get_bot() -> Bot:
     return _app.bot
@@ -562,12 +562,18 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     /buynow — instant buy at current market price with fixed SL/TP pips.
     /sellnow — instant sell at current market price with fixed SL/TP pips.
-    Uses same DCA pipeline as Hafiz signals (all guards, layers, sub-splits).
+    Uses same DCA pipeline as signals (all guards, layers, sub-splits).
     Checks H1+H4 trend before executing — warns if opposing direction.
+    Supports: /goldbuynow, /goldsellnow
     """
-    command = update.message.text.split()[0].lstrip("/").lower()  # "buynow" or "sellnow"
-    direction = "buy" if "buy" in command else "sell"
+    command = update.message.text.split()[0].lstrip("/").lower()
+    if not command.startswith("gold"):
+        await update.message.reply_text("This bot is configured for XAUUSD only. Use /goldbuynow or /goldsellnow.")
+        return
 
+    direction = "buy" if "buy" in command else "sell"
+    symbol = "XAUUSD"
+    
     # Get current market price from MT5
     import MetaTrader5 as mt5
     from core.mt5 import mt5_connect
@@ -576,21 +582,33 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("MT5 not connected. Start MT5 and try again.")
         return
 
-    symbol_mt5 = MANUAL_SYMBOL + MT5_SYMBOL_SUFFIX
+    symbol_mt5 = symbol + MT5_SYMBOL_SUFFIX
+    mt5.symbol_select(symbol_mt5, True)
+    symbol_info = mt5.symbol_info(symbol_mt5)
+    if symbol_info is None:
+        await update.message.reply_text(f"Symbol {symbol_mt5} not found. Check if available in MT5 Market Watch.")
+        mt5.shutdown()
+        return
     tick = mt5.symbol_info_tick(symbol_mt5)
     mt5.shutdown()
 
     if tick is None:
-        await update.message.reply_text(f"Could not get price for {symbol_mt5}.")
+        await update.message.reply_text(f"Could not get price for {symbol_mt5}. Market may be closed.")
         return
 
     price = tick.ask if direction == "buy" else tick.bid
     price = round(price, 2)
 
+    sl_pips  = GOLD_SL_PIPS
+    tp1_pips = GOLD_TP1_PIPS
+    tp2_pips = GOLD_TP2_PIPS
+    pip_size = SL_PIP_SIZE
+    skip_guards = False
+
     # Calculate SL and TPs from fixed pip distances
-    sl_dist  = MANUAL_SL_PIPS  * SL_PIP_SIZE
-    tp1_dist = MANUAL_TP1_PIPS * SL_PIP_SIZE
-    tp2_dist = MANUAL_TP2_PIPS * SL_PIP_SIZE
+    sl_dist  = sl_pips  * pip_size
+    tp1_dist = tp1_pips * pip_size
+    tp2_dist = tp2_pips * pip_size
 
     if direction == "buy":
         sl  = round(price - sl_dist, 2)
@@ -603,13 +621,13 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Build Signal object (same as Hafiz signal)
     signal = Signal(
-        symbol=MANUAL_SYMBOL,
+        symbol=symbol,
         direction=direction,
         entry_low=price,
         entry_high=price,
         sl=sl,
         tps=[tp1, tp2],
-        raw_text=f"/{command} {MANUAL_SYMBOL} {direction} @{price} sl {sl} tp {tp1} tp {tp2}",
+        raw_text=f"/{command} {symbol} {direction} @{price} sl {sl} tp {tp1} tp {tp2}",
     )
 
     signal_id = uuid.uuid4().hex[:8]
@@ -622,10 +640,10 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Trend check (H1 + H4) ────────────────────────────────────────────────
     trend_line = ""
     trend_opposed = False
-    if TREND_ENABLED:
+    if TREND_ENABLED and not skip_guards:
         from core.trend_analyzer import check_trend_alignment
         trend = await asyncio.get_event_loop().run_in_executor(
-            None, check_trend_alignment, direction, MANUAL_SYMBOL
+            None, check_trend_alignment, direction, symbol
         )
         h1_mark = "\u2705" if trend["h1"] != ("BEAR" if direction == "buy" else "BULL") else "\u274c"
         h4_mark = "\u2705" if trend["h4"] != ("BEAR" if direction == "buy" else "BULL") else "\u274c"
@@ -637,10 +655,10 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Fib retracement check (H1) ────────────────────────────────────────────
     fib_line = ""
     fib_opposed = False
-    if FIB_GUARD_ENABLED:
+    if FIB_GUARD_ENABLED and not skip_guards:
         from core.trend_analyzer import check_fib_entry
         fib = await asyncio.get_event_loop().run_in_executor(
-            None, check_fib_entry, direction, price, MANUAL_SYMBOL
+            None, check_fib_entry, direction, price, symbol
         )
         fib_pct = fib["fib_pct"]
         if fib["in_zone"]:
@@ -676,14 +694,14 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log.info(f"/{command}: warning — {', '.join(reasons)} [{signal_id}]")
 
     # ── Execute immediately regardless of warnings ────────────────────────────
-    _start_manual_watcher(signal, signal_id, direction_emoji, price, sl, tps_str, trend_line)
+    _start_manual_watcher(signal, signal_id, direction_emoji, price, sl, tps_str, trend_line, skip_guards)
 
     checks = trend_line
     if fib_line:
         checks = f"{checks} | {fib_line}" if checks else fib_line
     checks_info = f"\n{checks}" if checks else ""
 
-    if LAYER_MODE:
+    if LAYER_MODE and not skip_guards:
         mode_line = (
             f"\U0001f522 DCA mode - up to `{LAYER_COUNT}` layers "
             f"(`{LAYER2_PIPS}p` apart)"
@@ -696,25 +714,25 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg_lines += warn_lines + [""]
     msg_lines += [
         f"\U0001f3ae *Manual Trade*\n",
-        f"*{MANUAL_SYMBOL}* {direction_emoji} @ `{price}`{checks_info}",
-        f"SL: `{sl}` ({MANUAL_SL_PIPS}p) | TP: {tps_str}\n",
+        f"*{symbol}* {direction_emoji} @ `{price}`{checks_info}",
+        f"SL: `{sl}` ({sl_pips}p) | TP: {tps_str}\n",
         mode_line,
-        f"_All guards active - same pipeline as Hafiz signals_",
     ]
+    msg_lines.append("_All guards active - same pipeline as signals_")
 
     await update.message.reply_text(
         "\n".join(msg_lines),
         parse_mode="Markdown"
     )
-    log.info(f"/{command}: {MANUAL_SYMBOL} {direction} @ {price} SL={sl} TP1={tp1} TP2={tp2} [{signal_id}]")
+    log.info(f"/{command}: {symbol} {direction} @ {price} SL={sl} TP1={tp1} TP2={tp2} [{signal_id}]")
 
 
-def _start_manual_watcher(signal, signal_id, direction_emoji, price, sl, tps_str, trend_line):
+def _start_manual_watcher(signal, signal_id, direction_emoji, price, sl, tps_str, trend_line, skip_guards: bool = False):
     """Start the watcher task for a manual trade (shared by direct execute and confirm callback)."""
-    if LAYER_MODE:
-        watcher_task = watch_layered_entry(signal, signal_id, get_bot(), entry_mode="manual")
+    if skip_guards or not LAYER_MODE:
+        watcher_task = watch_and_execute(signal, signal_id, get_bot(), skip_proximity=True)
     else:
-        watcher_task = watch_and_execute(signal, signal_id, get_bot())
+        watcher_task = watch_layered_entry(signal, signal_id, get_bot(), entry_mode="manual", skip_proximity=True)
     asyncio.create_task(watcher_task)
 
 
@@ -755,7 +773,7 @@ async def handle_manual_trade_callback(query, context):
 
         await query.edit_message_text(
             f"\u2705 *Confirmed — executing against trend*\n\n"
-            f"*{MANUAL_SYMBOL}* {direction_emoji} @ `{price}`\n"
+            f"*{signal.symbol}* {direction_emoji} @ `{price}`\n"
             f"SL: `{signal.sl}` | TP: {tps_str}\n\n"
             f"{mode_line}\n"
             f"_All guards active_",
@@ -959,8 +977,8 @@ async def start_notifier():
     _app.add_handler(CommandHandler("zones", cmd_zones))
     _app.add_handler(CommandHandler("delzone", cmd_delzone))
     _app.add_handler(CommandHandler("clearmap", cmd_clearmap))
-    _app.add_handler(CommandHandler("buynow", cmd_trade_now))
-    _app.add_handler(CommandHandler("sellnow", cmd_trade_now))
+    _app.add_handler(CommandHandler("goldbuynow", cmd_trade_now))
+    _app.add_handler(CommandHandler("goldsellnow", cmd_trade_now))
     if TREND_ENABLED:
         _app.add_handler(CommandHandler("trend", cmd_trend))
     await _app.initialize()

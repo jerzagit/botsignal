@@ -31,8 +31,11 @@ MT5_SERVER        = os.getenv(_P + "MT5_SERVER", os.getenv("MT5_SERVER", ""))
 MT5_SYMBOL_SUFFIX = os.getenv(_P + "MT5_SYMBOL_SUFFIX", os.getenv("MT5_SYMBOL_SUFFIX", ""))
 
 # ── Risk management ───────────────────────────────────────────────────────────
-# % of FREE MARGIN to risk per trade (e.g. 0.05 = 5%)
-RISK_PERCENT    = float(os.getenv("RISK_PERCENT", "0.05"))
+# Symbol-specific risk benchmarks (10% of free margin = N pips of risk)
+# Higher benchmark = larger lot size for same SL distance
+RISK_PIPS_XAUUSD   = int(os.getenv("RISK_PIPS_XAUUSD", "1000"))   # Gold: 1000 pips benchmark
+RISK_PIPS_DEFAULT  = int(os.getenv("RISK_PIPS", "500"))           # fallback for other symbols
+RISK_PERCENT       = float(os.getenv("RISK_PERCENT", "0.005"))    # 0.5% equity risk by default
 
 # Min/max allowed lot sizes (safety guardrails)
 MIN_LOT         = float(os.getenv("MIN_LOT", "0.01"))
@@ -84,7 +87,9 @@ TP_ENFORCE_PIPS  = int(os.getenv("TP_ENFORCE_PIPS",  "70"))   # override TP to t
 # ── Same-direction stack guard ─────────────────────────────────────────────────
 # Block opening a new trade if one already exists in the same direction
 # on the same symbol. Prevents doubling exposure on a small account.
+# Modes: "block" (default) | "reduce" (allow but reduce lot by existing exposure)
 BLOCK_SAME_DIRECTION_STACK = os.getenv("BLOCK_SAME_DIRECTION_STACK", "true").lower() == "true"
+STACK_MODE = os.getenv("STACK_MODE", "reduce").lower()
 
 # ── SL sanity check (warns if Hafiz's SL is outside normal range) ─────────────
 # For XAUUSD: 1 pip = 0.1 price units  →  50 pips = 5.0 pts, 70 pips = 7.0 pts
@@ -141,12 +146,18 @@ L2_MIN_RUNWAY_PIPS = int(os.getenv("L2_MIN_RUNWAY_PIPS", "25"))
 # Fraction of total lot allocated to L1 (e.g. 0.30 = 30%). Remaining split equally across L2+.
 L1_LOT_RATIO       = float(os.getenv("L1_LOT_RATIO", "0.30"))
 
-# ── Manual trade (/buynow, /sellnow) ────────────────────────────────────────
+# ── Manual trade (/goldbuynow, /goldsellnow) ─────────────────────────────────
 MANUAL_SL_PIPS      = int(os.getenv("MANUAL_SL_PIPS",   "50"))       # SL distance from entry
 MANUAL_TP1_PIPS     = int(os.getenv("MANUAL_TP1_PIPS",  "50"))      # TP1 distance from entry
 MANUAL_TP2_PIPS     = int(os.getenv("MANUAL_TP2_PIPS",  "80"))      # TP2 distance from entry
 MANUAL_SYMBOL       = os.getenv("MANUAL_SYMBOL", "XAUUSD").upper()  # default symbol
 MANUAL_RISK_PERCENT = float(os.getenv("MANUAL_RISK_PERCENT", "0.10"))  # separate 10% risk
+
+# Gold specific settings
+GOLD_SL_PIPS   = int(os.getenv("GOLD_SL_PIPS",   "50"))
+GOLD_TP1_PIPS = int(os.getenv("GOLD_TP1_PIPS",  "50"))
+GOLD_TP2_PIPS = int(os.getenv("GOLD_TP2_PIPS",  "80"))
+
 
 # ── Fib retracement guard (manual trades) ──────────────────────────────────
 # Block/warn if price is outside the 0–38.2% pullback zone of the last opposite H1 candle
@@ -171,3 +182,20 @@ AGENT_END_HOUR_MY   = int(os.getenv("AGENT_END_HOUR_MY", "6"))     # 6 AM
 
 # If True, agent auto-executes without asking for confirmation (CAREFUL!)
 AGENT_AUTO_EXECUTE  = os.getenv("AGENT_AUTO_EXECUTE", "false").lower() == "true"
+
+# Low-risk full-auto strategy mode. Runs beside the Telegram signal bot.
+STRATEGY_ENABLED       = os.getenv("STRATEGY_ENABLED", "false").lower() == "true"
+STRATEGY_SYMBOL        = os.getenv("STRATEGY_SYMBOL", "XAUUSD").upper()
+STRATEGY_TIMEFRAME     = os.getenv("STRATEGY_TIMEFRAME", "M15").upper()
+STRATEGY_SCAN_INTERVAL = int(os.getenv("STRATEGY_SCAN_INTERVAL", "60"))
+STRATEGY_RISK_PERCENT  = float(os.getenv("STRATEGY_RISK_PERCENT", str(RISK_PERCENT)))
+STRATEGY_DAILY_DRAWDOWN_PERCENT = float(os.getenv("STRATEGY_DAILY_DRAWDOWN_PERCENT", "3.0"))
+STRATEGY_LIVE_UNLOCKED = os.getenv("STRATEGY_LIVE_UNLOCKED", "false").lower() == "true"
+STRATEGY_MIN_RR        = float(os.getenv("STRATEGY_MIN_RR", "1.4"))
+STRATEGY_BREAKOUT_LOOKBACK = int(os.getenv("STRATEGY_BREAKOUT_LOOKBACK", "20"))
+STRATEGY_RETEST_TOLERANCE_PIPS = int(os.getenv("STRATEGY_RETEST_TOLERANCE_PIPS", "20"))
+STRATEGY_CONFIRM_BODY_RATIO = float(os.getenv("STRATEGY_CONFIRM_BODY_RATIO", "0.45"))
+STRATEGY_SWING_BUFFER_PIPS = int(os.getenv("STRATEGY_SWING_BUFFER_PIPS", "10"))
+STRATEGY_TP_R_MULTIPLE = float(os.getenv("STRATEGY_TP_R_MULTIPLE", "1.5"))
+STRATEGY_PARTIAL_CLOSE_R = float(os.getenv("STRATEGY_PARTIAL_CLOSE_R", "1.0"))
+STRATEGY_PARTIAL_CLOSE_PERCENT = float(os.getenv("STRATEGY_PARTIAL_CLOSE_PERCENT", "50"))
