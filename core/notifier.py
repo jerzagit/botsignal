@@ -985,5 +985,4 @@ async def start_notifier():
     await _app.start()
     await _app.updater.start_polling()
     log.info("Telegram notifier started.")
-    # Keep running (listener runs in parallel via asyncio.gather)
-    await asyncio.Event().wait()
+    return _app

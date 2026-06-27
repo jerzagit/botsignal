@@ -12,13 +12,13 @@ version: "3.9"
 services:
   mysql:
     image: mysql:8.0
-    container_name: mysql-docker
+    container_name: botsignal-mysql
     restart: always
     environment:
       MYSQL_ROOT_PASSWORD: rootpass
       MYSQL_DATABASE: botsignal
     ports:
-      - "3307:3306"       # host:container — access via localhost:3307
+      - "3308:3306"       # host:container - access via localhost:3308
     volumes:
       - mysql_data:/var/lib/mysql
       - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro

@@ -16,7 +16,7 @@ from core.config import MT5_PATH, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_SYMBO
                        MAX_SPREAD_PIPS, MIN_RR_RATIO, BLOCK_SAME_DIRECTION_STACK, STACK_MODE, \
                        TRADE_SPLIT, MIN_LOT, SL_MIN_PIPS, TP_ENFORCE_PIPS, \
                        SESSION_FILTER_ENABLED, SESSION_START_HOUR_UTC, SESSION_END_HOUR_UTC, \
-                       MAX_DAILY_LOSS_USD
+                       MAX_DAILY_LOSS_USD, MAX_DCA_LAYERS_PER_SYMBOL
 from core.signal import Signal
 from core.risk   import calculate_lot
 

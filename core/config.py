@@ -177,11 +177,13 @@ TREND_RSI_PERIOD = int(os.getenv("TREND_RSI_PERIOD", "14"))        # RSI period
 
 # ── Trading agent schedule (Malaysia time = UTC+8) ────────────────────────────
 # Agent runs between these hours MY time (e.g. 22:00 – 06:00 covers London+NY)
+AGENT_ENABLED       = os.getenv("AGENT_ENABLED", "false").lower() == "true"
 AGENT_START_HOUR_MY = int(os.getenv("AGENT_START_HOUR_MY", "22"))  # 10 PM
 AGENT_END_HOUR_MY   = int(os.getenv("AGENT_END_HOUR_MY", "6"))     # 6 AM
 
 # If True, agent auto-executes without asking for confirmation (CAREFUL!)
 AGENT_AUTO_EXECUTE  = os.getenv("AGENT_AUTO_EXECUTE", "false").lower() == "true"
+AGENT_LIVE_UNLOCKED = os.getenv("AGENT_LIVE_UNLOCKED", "false").lower() == "true"
 
 # Low-risk full-auto strategy mode. Runs beside the Telegram signal bot.
 STRATEGY_ENABLED       = os.getenv("STRATEGY_ENABLED", "false").lower() == "true"

@@ -5,6 +5,8 @@ data/session*
 # Logs and data
 logs/
 data/trades.json
+data/bot.pid
+data/startup.timestamp
 
 # Python
 __pycache__/
@@ -12,6 +14,11 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+
+# Temp / scratch files
+check_py.py
+test_runtime_orchestration.py
+clear
 
 # VSCode
 .vscode/settings.json

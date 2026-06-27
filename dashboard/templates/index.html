@@ -4,1094 +4,603 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SignalBot Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; color: #222; }
-
-    header {
-      background: #1a1a2e; color: white; padding: 16px 24px;
-      display: flex; justify-content: space-between; align-items: center;
-    }
-    header h1 { font-size: 1.3rem; letter-spacing: 1px; }
-    header span { font-size: 0.8rem; color: #aaa; }
-
-    .container { max-width: 1200px; margin: 0 auto; padding: 24px 16px; }
-
-    /* Stat cards */
-    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin-bottom: 20px; }
-    .card {
-      background: white; border-radius: 10px; padding: 18px 16px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.07); text-align: center;
-    }
-    .card .label { font-size: 0.75rem; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
-    .card .value { font-size: 1.8rem; font-weight: 700; }
-    .card.green .value { color: #16a34a; }
-    .card.red   .value { color: #dc2626; }
-    .card.blue  .value { color: #2563eb; }
-    .card.orange .value { color: #ea580c; }
-
-    /* P&L bar */
-    .pnl-bar {
-      background: white; border-radius: 10px; padding: 14px 20px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-      display: flex; gap: 32px; align-items: center; margin-bottom: 24px;
-      flex-wrap: wrap;
-    }
-    .pnl-bar .item { display: flex; flex-direction: column; }
-    .pnl-bar .item .lbl { font-size: 0.72rem; color: #888; text-transform: uppercase; }
-    .pnl-bar .item .val { font-size: 1.1rem; font-weight: 600; }
-    .pnl-bar .item .val.pos { color: #16a34a; }
-    .pnl-bar .item .val.neg { color: #dc2626; }
-
-    /* Table */
-    .section-title { font-size: 0.85rem; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
-    .table-wrap { background: white; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.07); overflow: hidden; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    th { background: #1a1a2e; color: white; padding: 10px 12px; text-align: left; font-weight: 500; }
-    td { padding: 10px 12px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
-    tr:last-child td { border-bottom: none; }
-    tr.trade-row { background: #fafafa; }
-    tr.trade-row td { padding: 6px 12px 10px 12px; font-size: 0.8rem; color: #555; }
-    tr:hover > td { background: #f5f7ff; }
-
-    /* Badges */
-    .badge {
-      display: inline-block; padding: 2px 8px; border-radius: 12px;
-      font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
-    }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f4f6; }
+    .card { background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
     .badge.executed { background: #dbeafe; color: #1d4ed8; }
-    .badge.skipped  { background: #f3f4f6; color: #6b7280; }
-    .badge.expired  { background: #ffedd5; color: #c2410c; }
-    .badge.pending  { background: #fef9c3; color: #854d0e; }
-    .badge.buy      { background: #dcfce7; color: #15803d; }
-    .badge.sell     { background: #fee2e2; color: #b91c1c; }
-    .badge.win      { background: #dcfce7; color: #15803d; }
-    .badge.loss     { background: #fee2e2; color: #b91c1c; }
-    .badge.open     { background: #f3f4f6; color: #6b7280; }
-    .badge.manual   { background: #ede9fe; color: #6d28d9; }
-    .badge.env-demo { background: #dcfce7; color: #15803d; font-size: 0.75rem; padding: 3px 10px; }
-    .badge.env-live { background: #fee2e2; color: #b91c1c; font-size: 0.75rem; padding: 3px 10px; }
-
-    .tps { color: #555; }
-    .empty { text-align: center; padding: 40px; color: #aaa; }
-
-    /* ── Guards section ───────────────────────────────── */
-    .guards-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 12px;
-      margin-bottom: 20px;
-    }
-    .guard-card {
-      background: white; border-radius: 10px; padding: 14px 16px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-      border-left: 4px solid #e5e7eb;
-      display: flex; flex-direction: column; gap: 4px;
-    }
-    .guard-card.pass  { border-left-color: #16a34a; }
-    .guard-card.block { border-left-color: #dc2626; }
-    .guard-card.info  { border-left-color: #2563eb; }
-    .guard-card .g-title { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: #374151; }
-    .guard-card .g-threshold { font-size: 0.8rem; color: #6b7280; }
-    .guard-card .g-live { font-size: 1rem; font-weight: 700; margin-top: 4px; }
-    .guard-card .g-live.ok  { color: #16a34a; }
-    .guard-card .g-live.bad { color: #dc2626; }
-    .guard-card .g-live.na  { color: #9ca3af; font-weight: 400; font-size: 0.8rem; }
-    .guard-card .g-status { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.5px; }
-    .guard-card .g-status.ok  { color: #16a34a; }
-    .guard-card .g-status.bad { color: #dc2626; }
-    .guard-card .g-detail { display: none; font-size: 0.72rem; color: #6b7280; line-height: 1.5; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #e5e7eb; }
-    .guard-card .g-detail.show { display: block; }
-    .guard-card .g-toggle { font-size: 0.68rem; color: #2563eb; cursor: pointer; margin-top: 4px; user-select: none; }
-    .guard-card .g-toggle:hover { text-decoration: underline; }
-    .guard-card .g-detail .scenario { background: #f9fafb; border-radius: 6px; padding: 6px 8px; margin-top: 4px; font-family: monospace; font-size: 0.68rem; line-height: 1.4; white-space: pre-wrap; }
-
-    .account-bar {
-      background: white; border-radius: 10px; padding: 14px 20px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-      display: flex; gap: 32px; align-items: center; margin-bottom: 16px;
-      flex-wrap: wrap;
-    }
-    .account-bar .item { display: flex; flex-direction: column; }
-    .account-bar .item .lbl { font-size: 0.72rem; color: #888; text-transform: uppercase; }
-    .account-bar .item .val { font-size: 1rem; font-weight: 600; }
-
-    .badge.margin  { background: #fee2e2; color: #b91c1c; }
-    .badge.stack   { background: #fef9c3; color: #854d0e; }
-    .badge.rr_ratio  { background: #ede9fe; color: #6d28d9; }
-    .badge.spread  { background: #ffedd5; color: #c2410c; }
-    .badge.proximity { background: #dbeafe; color: #1d4ed8; }
-    .badge.lot_calc  { background: #f3f4f6; color: #6b7280; }
-    .badge.dca       { background: #dbeafe; color: #1e40af; font-weight: 600; }
-    .badge.direct    { background: #f3f4f6; color: #374151; }
-    .badge.mapped    { background: #fef3c7; color: #92400e; font-weight: 600; }
-    .badge.fired     { background: #dcfce7; color: #15803d; }
-    .badge.watching  { background: #dbeafe; color: #1d4ed8; }
-
-    /* SNR chips */
-    .snr-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
-    .snr-chip {
-      display: inline-block; padding: 3px 10px; border-radius: 14px;
-      font-size: 0.78rem; font-weight: 600; background: #f3f4f6; color: #374151;
-      border: 1px solid #e5e7eb;
-    }
-
-    /* Zone cards */
-    .zone-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-bottom: 20px; }
-    .zone-card {
-      background: white; border-radius: 10px; padding: 14px 16px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-      border-left: 4px solid #e5e7eb;
-      display: flex; flex-direction: column; gap: 4px;
-    }
-    .zone-card.buy-zone  { border-left-color: #16a34a; }
-    .zone-card.sell-zone { border-left-color: #dc2626; }
-    .zone-card.is-fired  { opacity: 0.6; }
-    .zone-card .zc-header { display: flex; justify-content: space-between; align-items: center; }
-    .zone-card .zc-title  { font-size: 0.82rem; font-weight: 700; }
-    .zone-card .zc-detail { font-size: 0.78rem; color: #6b7280; }
-
-    /* ── Date filter bar ──────────────────────────────────── */
-    .filter-bar {
-      background: white; border-radius: 10px; padding: 10px 16px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-      display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
-      margin-bottom: 20px;
-    }
-    .filter-bar .period-label { font-size: 0.78rem; font-weight: 600; color: #555; white-space: nowrap; }
-    .filter-bar .sep { color: #d1d5db; }
-    .quick-btns { display: flex; gap: 6px; }
-    .quick-btn {
-      padding: 4px 12px; border-radius: 6px; border: 1px solid #e5e7eb;
-      cursor: pointer; font-size: 0.78rem; background: #f9fafb; color: #374151;
-      font-weight: 500; transition: all 0.15s;
-    }
-    .quick-btn:hover { background: #f0f0f0; }
-    .quick-btn.active { background: #1a1a2e; color: white; border-color: #1a1a2e; }
-    .filter-bar label { font-size: 0.78rem; color: #888; display: flex; align-items: center; gap: 5px; }
-    .filter-bar input[type="date"] {
-      padding: 4px 8px; border: 1px solid #e5e7eb; border-radius: 6px;
-      font-size: 0.78rem; color: #222; background: #f9fafb;
-    }
-
-    @media (max-width: 700px) {
-      table { font-size: 0.75rem; }
-      th, td { padding: 8px 6px; }
+    .badge.skipped { background: #f3f4f6; color: #6b7280; }
+    .badge.expired { background: #ffedd5; color: #c2410c; }
+    .badge.pending { background: #fef9c3; color: #854d0e; }
+    .badge.buy { background: #dcfce7; color: #15803d; }
+    .badge.sell { background: #fee2e2; color: #b91c1c; }
+    .badge.win { background: #dcfce7; color: #15803d; }
+    .badge.loss { background: #fee2e2; color: #b91c1c; }
+    .badge.open { background: #f3f4f6; color: #6b7280; }
+    .badge.dca { background: #dbeafe; color: #1e40af; }
+    .badge.manual { background: #ede9fe; color: #6d28d9; }
+    .badge.mapped { background: #fef3c7; color: #92400e; }
+    .guard-pass { border-left: 4px solid #10b981; }
+    .guard-block { border-left: 4px solid #ef4444; }
+    .guard-info { border-left: 4px solid #3b82f6; }
+    .guard-default { border-left: 4px solid #d1d5db; }
+    .guard-detail { display: none; }
+    .guard-detail.show { display: block; }
+    .scenario { background: #f9fafb; border-radius: 6px; padding: 8px; font-family: monospace; font-size: 0.7rem; white-space: pre-wrap; }
+    @media (max-width: 768px) {
+      .grid-cols-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
-<body>
+<body class="min-h-screen">
 
-<header>
-  <h1>SignalBot Dashboard <span id="env-badge" class="badge" style="margin-left:10px;">—</span></h1>
-  <span id="last-updated">Loading...</span>
-</header>
+  <!-- Header -->
+  <header class="bg-gray-900 text-white px-6 py-4 flex justify-between items-center">
+    <h1 class="text-xl font-semibold">SignalBot Dashboard</h1>
+    <div class="flex items-center gap-4">
+      <span id="env-badge" class="badge bg-green-100 text-green-800">—</span>
+      <span id="last-updated" class="text-gray-400 text-sm">—</span>
+    </div>
+  </header>
 
-<div class="container">
+  <main class="max-w-7xl mx-auto px-4 py-6 space-y-6">
 
-  <!-- Date Filter Bar -->
-  <div class="filter-bar">
-    <span class="period-label">Period:</span>
-    <div class="quick-btns">
-      <button class="quick-btn active" id="qb-today"     onclick="setQuickFilter('today')">Today</button>
-      <button class="quick-btn"        id="qb-yesterday" onclick="setQuickFilter('yesterday')">Yesterday</button>
-      <button class="quick-btn"        id="qb-week"      onclick="setQuickFilter('week')">This Week</button>
-      <button class="quick-btn"        id="qb-all"       onclick="setQuickFilter('all')">All Time</button>
-    </div>
-    <span class="sep">|</span>
-    <label>From <input type="date" id="filter-from" onchange="setCustomFilter()"></label>
-    <label>To <input type="date" id="filter-to" onchange="setCustomFilter()"></label>
-  </div>
-
-  <!-- Stat Cards -->
-  <div class="cards">
-    <div class="card">
-      <div class="label">Total Signals</div>
-      <div class="value" id="total-signals">—</div>
-    </div>
-    <div class="card blue">
-      <div class="label">Executed</div>
-      <div class="value" id="executed">—</div>
-    </div>
-    <div class="card">
-      <div class="label">Skipped</div>
-      <div class="value" id="skipped">—</div>
-    </div>
-    <div class="card orange">
-      <div class="label">Expired</div>
-      <div class="value" id="expired">—</div>
-    </div>
-    <div class="card">
-      <div class="label">Open Trades</div>
-      <div class="value" id="open-trades">—</div>
-    </div>
-    <div class="card green">
-      <div class="label">Win Rate</div>
-      <div class="value" id="win-rate">—</div>
-    </div>
-  </div>
-
-  <!-- P&L Bar -->
-  <div class="pnl-bar">
-    <div class="item">
-      <span class="lbl">Wins</span>
-      <span class="val" id="wins">—</span>
-    </div>
-    <div class="item">
-      <span class="lbl">Losses</span>
-      <span class="val" id="losses">—</span>
-    </div>
-    <div class="item">
-      <span class="lbl">Total P&L</span>
-      <span class="val" id="total-profit">—</span>
-    </div>
-  </div>
-
-  <!-- ── Guards Section ──────────────────────────────────────── -->
-  <div class="section-title" style="margin-top:8px;">Trade Guards</div>
-
-  <!-- Live account health -->
-  <div class="account-bar" id="account-bar">
-    <div class="item"><span class="lbl">Balance</span><span class="val" id="acc-balance">—</span></div>
-    <div class="item"><span class="lbl">Equity</span><span class="val" id="acc-equity">—</span></div>
-    <div class="item"><span class="lbl">Free Margin</span><span class="val" id="acc-free">—</span></div>
-    <div class="item"><span class="lbl">Margin Level</span><span class="val" id="acc-margin-level">—</span></div>
-    <div class="item"><span class="lbl">XAUUSD Spread</span><span class="val" id="acc-spread">—</span></div>
-    <div class="item" id="dca-estimate-item" style="display:none;border-left:2px solid #e5e7eb;padding-left:16px;">
-      <span class="lbl">Est. DCA Split</span>
-      <span class="val" id="acc-dca-estimate" style="font-size:0.85rem;">—</span>
-    </div>
-  </div>
-
-  <!-- Guard cards -->
-  <div class="guards-grid" id="guards-grid">
-    <div class="guard-card" id="gc-session">
-      <div class="g-title">Guard 0 · Session Filter</div>
-      <div class="g-threshold" id="gc-session-thresh">—</div>
-      <div class="g-live na" id="gc-session-live">Loading…</div>
-      <div class="g-status" id="gc-session-status"></div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Blocks ALL new entries outside London + NY trading hours. Open positions are unaffected — SL/TP still run. Manual /buynow /sellnow bypass this guard.
-        <div class="scenario">Session: 07:00–21:00 UTC = 15:00–05:00 MYT
-PASS: 18:00 UTC (London/NY overlap) → trade allowed ✓
-BLOCK: 02:00 UTC (Asian session) → entry blocked ✗
-Manual /buynow: session filter bypassed ✓
-Existing open positions: unaffected (SL/TP live)</div>
+    <!-- Date Filter -->
+    <div class="card p-4 flex flex-wrap items-center gap-4">
+      <span class="font-semibold text-gray-600">Period:</span>
+      <div class="flex gap-2">
+        <button onclick="setQuickFilter('today')" class="quick-btn active px-3 py-1 rounded border text-sm hover:bg-gray-100">Today</button>
+        <button onclick="setQuickFilter('yesterday')" class="quick-btn px-3 py-1 rounded border text-sm hover:bg-gray-100">Yesterday</button>
+        <button onclick="setQuickFilter('week')" class="quick-btn px-3 py-1 rounded border text-sm hover:bg-gray-100">This Week</button>
+        <button onclick="setQuickFilter('all')" class="quick-btn px-3 py-1 rounded border text-sm hover:bg-gray-100">All Time</button>
+      </div>
+      <div class="flex items-center gap-2 text-sm text-gray-500">
+        <label>From <input type="date" id="filter-from" class="border rounded px-2 py-1"></label>
+        <label>To <input type="date" id="filter-to" class="border rounded px-2 py-1"></label>
       </div>
     </div>
-    <div class="guard-card" id="gc-margin">
-      <div class="g-title">Guard 1 · Margin Level</div>
-      <div class="g-threshold" id="gc-margin-thresh">—</div>
-      <div class="g-live na" id="gc-margin-live">Loading…</div>
-      <div class="g-status" id="gc-margin-status"></div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Blocks new trades when your account is overleveraged. Margin level = equity / used margin × 100. Skipped when no open trades (first trade always allowed).
-        <div class="scenario">PASS: Equity $950, Used $200 → 475% > 300%
-BLOCK: Equity $500, Used $400 → 125% < 300%
-Fix: Close losing positions to free margin</div>
+
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      <div class="card p-4 text-center">
+        <div class="text-xs text-gray-500 uppercase mb-1">Total Signals</div>
+        <div class="text-2xl font-bold" id="total-signals">—</div>
+      </div>
+      <div class="card p-4 text-center">
+        <div class="text-xs text-gray-500 uppercase mb-1">Executed</div>
+        <div class="text-2xl font-bold text-blue-600" id="executed">—</div>
+      </div>
+      <div class="card p-4 text-center">
+        <div class="text-xs text-gray-500 uppercase mb-1">Skipped</div>
+        <div class="text-2xl font-bold" id="skipped">—</div>
+      </div>
+      <div class="card p-4 text-center">
+        <div class="text-xs text-gray-500 uppercase mb-1">Expired</div>
+        <div class="text-2xl font-bold text-orange-600" id="expired">—</div>
+      </div>
+      <div class="card p-4 text-center">
+        <div class="text-xs text-gray-500 uppercase mb-1">Open</div>
+        <div class="text-2xl font-bold" id="open-trades">—</div>
+      </div>
+      <div class="card p-4 text-center">
+        <div class="text-xs text-gray-500 uppercase mb-1">Win Rate</div>
+        <div class="text-2xl font-bold text-green-600" id="win-rate">—</div>
       </div>
     </div>
-    <div class="guard-card" id="gc-stack">
-      <div class="g-title">Guard 2 · Direction Stack</div>
-      <div class="g-threshold" id="gc-stack-thresh">—</div>
-      <div class="g-live na" id="gc-stack-live">—</div>
-      <div class="g-status" id="gc-stack-status"></div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Prevents doubling exposure on the same direction. If you already have a SELL open at risk, another SELL is blocked. Breakeven positions (SL = entry) and own DCA sub-orders are exempt.
-        <div class="scenario">PASS: New BUY, existing SELL open → OK (different direction)
-PASS: New SELL, existing SELL at breakeven → OK (risk-free)
-PASS: L2 SELL, L1 SELL open → OK (own DCA tickets exempt)
-BLOCK: New SELL, existing SELL at risk → blocked</div>
+
+    <!-- P&L Bar -->
+    <div class="card p-4 flex flex-wrap gap-8 items-center">
+      <div><div class="text-xs text-gray-500 uppercase">Wins</div><div class="text-xl font-bold text-green-600" id="wins">—</div></div>
+      <div><div class="text-xs text-gray-500 uppercase">Losses</div><div class="text-xl font-bold text-red-600" id="losses">—</div></div>
+      <div><div class="text-xs text-gray-500 uppercase">Total P&L</div><div class="text-xl font-bold" id="total-profit">—</div></div>
+    </div>
+
+    <!-- Account Health -->
+    <div class="card p-4">
+      <div class="flex flex-wrap items-center justify-between gap-4 mb-2">
+        <h2 class="text-sm font-semibold text-gray-600 uppercase">Account</h2>
+        <div class="flex gap-4 text-sm">
+          <div><span class="text-gray-500">Bal:</span> <span class="font-semibold" id="acc-balance">—</span></div>
+          <div><span class="text-gray-500">Eq:</span> <span class="font-semibold" id="acc-equity">—</span></div>
+          <div><span class="text-gray-500">Free:</span> <span class="font-semibold" id="acc-free">—</span></div>
+          <div><span class="text-gray-500">ML:</span> <span class="font-semibold" id="acc-margin-level">—</span></div>
+          <div><span class="text-gray-500">Sp:</span> <span class="font-semibold" id="acc-spread">—</span></div>
+        </div>
+      </div>
+      <div class="h-24">
+        <canvas id="perfChart"></canvas>
       </div>
     </div>
-    <div class="guard-card" id="gc-rr_ratio">
-      <div class="g-title">Guard 3 · RR Ratio</div>
-      <div class="g-threshold" id="gc-rr_ratio-thresh">—</div>
-      <div class="g-live na" id="gc-rr_ratio-live">Signal dependent</div>
-      <div class="g-status" id="gc-rr_ratio-status"></div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Checks reward vs risk. If SL is tight (< 50p), TP auto-adjusts to 70p first. Then blocks if TP/SL ratio is still below minimum. Calculated from entry_mid.
-        <div class="scenario">PASS: SL=30p, TP auto→70p, ratio=2.3:1 > 1.4 ✓
-PASS: SL=50p, TP=80p, ratio=1.6:1 > 1.4 ✓
-BLOCK: SL=60p, TP=50p, ratio=0.83:1 < 1.4 ✗
-Note: Poor RR = risking more than potential reward</div>
+
+    <!-- Trade Guards -->
+    <div>
+      <h2 class="text-lg font-semibold text-gray-700 mb-4">Trade Guards</h2>
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="guards-grid">
+        
+        <!-- Guard 0: Session -->
+        <div class="card p-4 guard-default" id="gc-session">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-semibold text-sm">Session Filter</div>
+            <span class="text-xs text-gray-500" id="gc-session-thresh">—</span>
+          </div>
+          <div class="text-lg font-bold mb-1" id="gc-session-live">—</div>
+          <div class="text-xs mb-2" id="gc-session-status">—</div>
+          <button class="text-xs text-blue-600" onclick="toggleDetail(this)">Show details</button>
+          <div class="guard-detail text-xs text-gray-600 mt-2 pt-2 border-t">
+            Blocks entries outside trading hours (07:00-21:00 UTC). Manual trades bypass this.
+          </div>
+        </div>
+
+        <!-- Guard 1: Margin -->
+        <div class="card p-4 guard-default" id="gc-margin">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-semibold text-sm">Margin Level</div>
+            <span class="text-xs text-gray-500" id="gc-margin-thresh">—</span>
+          </div>
+          <div class="text-lg font-bold mb-1" id="gc-margin-live">—</div>
+          <div class="text-xs mb-2" id="gc-margin-status">—</div>
+          <button class="text-xs text-blue-600" onclick="toggleDetail(this)">Show details</button>
+          <div class="guard-detail text-xs text-gray-600 mt-2 pt-2 border-t">
+            Blocks when margin level &lt; 300%. Skipped on first trade.
+          </div>
+        </div>
+
+        <!-- Guard 2: Stack -->
+        <div class="card p-4 guard-default" id="gc-stack">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-semibold text-sm">Direction Stack</div>
+            <span class="text-xs text-gray-500" id="gc-stack-thresh">—</span>
+          </div>
+          <div class="text-lg font-bold mb-1" id="gc-stack-live">—</div>
+          <div class="text-xs mb-2" id="gc-stack-status">—</div>
+          <button class="text-xs text-blue-600" onclick="toggleDetail(this)">Show details</button>
+          <div class="guard-detail text-xs text-gray-600 mt-2 pt-2 border-t">
+            BLOCK: Rejects same-direction stacking.<br>
+            REDUCE: Reduces lot by existing exposure.
+          </div>
+        </div>
+
+        <!-- Guard 3: RR Ratio -->
+        <div class="card p-4 guard-default" id="gc-rr_ratio">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-semibold text-sm">RR Ratio</div>
+            <span class="text-xs text-gray-500" id="gc-rr_ratio-thresh">—</span>
+          </div>
+          <div class="text-lg font-bold mb-1">Signal dependent</div>
+          <button class="text-xs text-blue-600" onclick="toggleDetail(this)">Show details</button>
+          <div class="guard-detail text-xs text-gray-600 mt-2 pt-2 border-t">
+            Requires TP/SL ≥ 1.4:1. Auto-adjusts TP if SL &lt; 50pips.
+          </div>
+        </div>
+
+        <!-- Guard 4: Spread -->
+        <div class="card p-4 guard-default" id="gc-spread">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-semibold text-sm">Spread</div>
+            <span class="text-xs text-gray-500" id="gc-spread-thresh">—</span>
+          </div>
+          <div class="text-lg font-bold mb-1" id="gc-spread-live">—</div>
+          <div class="text-xs mb-2" id="gc-spread-status">—</div>
+          <button class="text-xs text-blue-600" onclick="toggleDetail(this)">Show details</button>
+          <div class="guard-detail text-xs text-gray-600 mt-2 pt-2 border-t">
+            Blocks when spread &gt; max. Retries until normal.
+          </div>
+        </div>
+
+        <!-- Guard 5: Proximity -->
+        <div class="card p-4 guard-default" id="gc-proximity">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-semibold text-sm">Entry Proximity</div>
+            <span class="text-xs text-gray-500" id="gc-proximity-thresh">—</span>
+          </div>
+          <div class="text-lg font-bold mb-1">Signal dependent</div>
+          <button class="text-xs text-blue-600" onclick="toggleDetail(this)">Show details</button>
+          <div class="guard-detail text-xs text-gray-600 mt-2 pt-2 border-t">
+            Blocks if price &gt; 50 pips from entry zone. Skipped for L2+.
+          </div>
+        </div>
+
+        <!-- Guard 6: Lot -->
+        <div class="card p-4 guard-default" id="gc-lot_calc">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-semibold text-sm">Lot Sizing</div>
+            <span class="text-xs text-gray-500" id="gc-lot_calc-thresh">—</span>
+          </div>
+          <div class="text-lg font-bold mb-1">Calculated per signal</div>
+          <button class="text-xs text-blue-600" onclick="toggleDetail(this)">Show details</button>
+          <div class="guard-detail text-xs text-gray-600 mt-2 pt-2 border-t">
+            Lot = (margin × 10%) / (500 × per_pip_risk)<br>
+            MIN_LOT=0.01, MAX_LOT=0.50
+          </div>
+        </div>
+
+        <!-- Risk Sizing -->
+        <div class="card p-4 guard-info">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-semibold text-sm">Risk Sizing</div>
+            <span class="text-xs text-gray-500">10% / 500p</span>
+          </div>
+          <div class="text-lg font-bold mb-1">10% margin / 500p benchmark</div>
+          <button class="text-xs text-blue-600" onclick="toggleDetail(this)">Show details</button>
+          <div class="guard-detail text-xs text-gray-600 mt-2 pt-2 border-t">
+            Lot scales with account. DCA activates at $1000+.
+          </div>
+        </div>
+
+        <!-- DCA -->
+        <div class="card p-4 guard-info">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-semibold text-sm">DCA Layers</div>
+            <span class="text-xs text-gray-500" id="gc-dca-thresh">—</span>
+          </div>
+          <div class="text-lg font-bold mb-1" id="gc-dca-live">—</div>
+          <button class="text-xs text-blue-600" onclick="toggleDetail(this)">Show details</button>
+          <div class="guard-detail text-xs text-gray-600 mt-2 pt-2 border-t">
+            L1 = 30% of lot, L2+ = 70% shared equally.<br>
+            Sub-splits into TP1/TP2/Runner.
+          </div>
+        </div>
+
+        <!-- Profit Lock -->
+        <div class="card p-4 guard-info">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-semibold text-sm">Profit Lock</div>
+            <span class="text-xs text-gray-500" id="gc-profitlock-thresh">—</span>
+          </div>
+          <div class="text-lg font-bold mb-1">+50p → BE + 100p TP</div>
+          <button class="text-xs text-blue-600" onclick="toggleDetail(this)">Show details</button>
+          <div class="guard-detail text-xs text-gray-600 mt-2 pt-2 border-t">
+            At +50p profit: SL→breakeven, TP→+100p.<br>
+            Trailing stop activates after lock.
+          </div>
+        </div>
+
+        <!-- Trailing Stop -->
+        <div class="card p-4 guard-info">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-semibold text-sm">Trailing Stop</div>
+            <span class="text-xs text-gray-500" id="gc-trail-thresh">—</span>
+          </div>
+          <div class="text-lg font-bold mb-1">20p trail</div>
+          <button class="text-xs text-blue-600" onclick="toggleDetail(this)">Show details</button>
+          <div class="guard-detail text-xs text-gray-600 mt-2 pt-2 border-t">
+            After profit lock: SL trails every 20p of favorable movement.
+          </div>
+        </div>
+
+        <!-- Daily Loss -->
+        <div class="card p-4 guard-info">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-semibold text-sm">Daily Loss Limit</div>
+            <span class="text-xs text-gray-500" id="gc-daily-loss-thresh">—</span>
+          </div>
+          <div class="text-lg font-bold mb-1">Circuit breaker</div>
+          <button class="text-xs text-blue-600" onclick="toggleDetail(this)">Show details</button>
+          <div class="guard-detail text-xs text-gray-600 mt-2 pt-2 border-t">
+            Blocks all trades after daily loss limit reached. Resets at midnight.
+          </div>
+        </div>
+
       </div>
     </div>
-    <div class="guard-card" id="gc-spread">
-      <div class="g-title">Guard 4 · Spread</div>
-      <div class="g-threshold" id="gc-spread-thresh">—</div>
-      <div class="g-live na" id="gc-spread-live">Loading…</div>
-      <div class="g-status" id="gc-spread-status"></div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Blocks when broker spread is abnormally wide (news events, off-hours). Wide spread eats into your SL distance. Always retries — never fatal. Bot waits for spread to normalise.
-        <div class="scenario">PASS: Spread 1.8 pips → normal market ✓
-BLOCK: Spread 4.2 pips → news event, retry in 30s
-BLOCK: Spread 8.0 pips → off-hours, retry until market opens
-XAUUSD normal: 1-2 pips | News: 5-15 pips</div>
+
+    <!-- Signal & Executions Log -->
+    <div class="card p-6">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-lg font-semibold text-gray-700">Signal & Executions Log</h2>
+        <span id="signal-period-label" class="text-sm text-gray-500">Last 20</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-800 text-white">
+            <tr>
+              <th class="px-4 py-2 text-left">Time</th>
+              <th class="px-4 py-2 text-left">Symbol</th>
+              <th class="px-4 py-2 text-left">Direction</th>
+              <th class="px-4 py-2 text-left">Entry</th>
+              <th class="px-4 py-2 text-left">SL</th>
+              <th class="px-4 py-2 text-left">TPs</th>
+              <th class="px-4 py-2 text-left">Status</th>
+            </tr>
+          </thead>
+          <tbody id="signal-table-body" class="divide-y divide-gray-200">
+            <tr><td colspan="7" class="px-4 py-8 text-center text-gray-500">No signals</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
-    <div class="guard-card" id="gc-proximity">
-      <div class="g-title">Guard 5 · Entry Proximity</div>
-      <div class="g-threshold" id="gc-proximity-thresh">—</div>
-      <div class="g-live na" id="gc-proximity-live">Signal dependent</div>
-      <div class="g-status" id="gc-proximity-status"></div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Blocks if current price is too far from Hafiz's entry zone. Tightened to 5 pips — prevents premature entry before price reaches the zone. Skipped for L2+ in DCA mode (deeper entries are intentional).
-        <div class="scenario">PASS: Zone 4650-4654, price 4652 → inside zone ✓
-PASS: Zone 4650-4654, price 4654.4 → 4p away ✓
-BLOCK: Zone 4650-4654, price 4659 → 50p away ✗
-DCA L2+: Always skipped (triggered by gap from L1 entry)</div>
+
+    <!-- Guard Fire Log -->
+    <div class="card p-6">
+      <div class="flex justify-between items-center mb-4">
+        <h2 class="text-lg font-semibold text-gray-700">Guard Fire Log</h2>
+        <span class="text-sm text-gray-500">Last 10 events</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-800 text-white">
+            <tr>
+              <th class="px-4 py-2 text-left">Time</th>
+              <th class="px-4 py-2 text-left">Guard</th>
+              <th class="px-4 py-2 text-left">Symbol</th>
+              <th class="px-4 py-2 text-left">Direction</th>
+              <th class="px-4 py-2 text-left">Actual</th>
+              <th class="px-4 py-2 text-left">Required</th>
+              <th class="px-4 py-2 text-left">Reason</th>
+            </tr>
+          </thead>
+          <tbody id="guard-log-body" class="divide-y divide-gray-200">
+            <tr><td colspan="7" class="px-4 py-4 text-center text-gray-500">No guard events</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="mt-3 text-center">
+        <a href="#" onclick="alert('Full guard log page coming soon')" class="text-sm text-blue-600 hover:underline">See more &raquo;</a>
       </div>
     </div>
-    <div class="guard-card" id="gc-lot_calc">
-      <div class="g-title">Guard 6 · Lot Calculation</div>
-      <div class="g-threshold" id="gc-lot_calc-thresh">—</div>
-      <div class="g-live na" id="gc-lot_calc-live">Calculated per signal</div>
-      <div class="g-status" id="gc-lot_calc-status"></div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Blocks if calculated lot is 0 — account too small for even MIN_LOT. Lot = (free_margin × risk%) / (SL_pips × pip_value). Weighted DCA split: L1 gets 30%, remaining 70% shared across L2+.
-        <div class="scenario">PASS: $500 margin, 10% risk, 50p SL → 0.09 lot
-  L1 (30%): 0.03 lot → 3 sub-orders × 0.01
-  L2 (35%): 0.03 lot → 3 sub-orders × 0.01
-  L3 (35%): 0.03 lot → skipped (runway guard)
-PASS: $1000, 0.20 lot → L1=0.06, L2=0.07, L3=0.07
-BLOCK: $50 margin → 0.005 lot < MIN_LOT → blocked</div>
-      </div>
-    </div>
-    <div class="guard-card info">
-      <div class="g-title">Risk per Trade</div>
-      <div class="g-threshold" id="gc-risk-thresh">—</div>
-      <div class="g-live na">Applied to free margin</div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Maximum percentage of free margin risked per signal. All layers combined worst-case loss stays within this budget. Lot is calculated once at signal arrival using entry_mid.
-        <div class="scenario">$1000 free margin × 10% = $100 max risk
-Total lot → split across 7 layers → 4 sub-orders each
-All 28 sub-orders combined SL loss ≈ $100
-L1 risks more (enters far from SL)
-L2+ risks less (enters closer to SL)
-Combined ≈ budget (within ~2% overage)</div>
-      </div>
-    </div>
-    <div class="guard-card info">
-      <div class="g-title">Auto TP Enforcement</div>
-      <div class="g-threshold" id="gc-autotp-thresh">—</div>
-      <div class="g-live na">Applied per signal</div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        When Hafiz's SL is tight (< 50 pips), the TP is automatically pushed further to maintain a good reward-to-risk ratio. Prevents entering trades with tiny TP targets.
-        <div class="scenario">SL = 30p (tight), Hafiz TP = 40p
-→ Auto-adjusted TP to 70p from mid
-→ New RR = 70/30 = 2.3:1 ✓
-SL = 60p → no adjustment, use Hafiz's TP as-is</div>
-      </div>
-    </div>
-    <div class="guard-card info" id="gc-profitlock">
-      <div class="g-title">Profit Lock</div>
-      <div class="g-threshold" id="gc-profitlock-thresh">—</div>
-      <div class="g-live na" id="gc-profitlock-live">Monitors open positions</div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        When any position reaches +50 pips profit, SL moves to breakeven (entry price) and TP tightens to entry ± 100p. Checked every 30s. After locking, trailing stop activates automatically.
-        <div class="scenario">SELL entry @ 4651, profit lock at +50p (price = 4646):
-  SL → 4651 (breakeven, zero risk)
-  TP → 4641 (entry − 100p)
-  → Trailing stop now active (20p trail)
 
-Price drops to 4635 (+20p further):
-  Trail kicks in → SL moves to 4637
-  → Profit guaranteed even if price reverses</div>
-      </div>
-    </div>
-    <div class="guard-card info" id="gc-trail">
-      <div class="g-title">Trailing Stop</div>
-      <div class="g-threshold" id="gc-trail-thresh">—</div>
-      <div class="g-live na" id="gc-trail-live">Activates after profit lock</div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        After profit lock fires, SL trails price every 20 pips of further favorable movement. SL only moves in profit direction — never backwards. Locks in progressively more profit as price runs.
-        <div class="scenario">SELL locked @ 4651 (SL=BE), price now 4646:
-  trail_price seeded = 4646
-
-Price → 4644 (2p move, < 20p threshold → no trail)
-Price → 4628 (18p move below seed → trail!)
-  New SL = 4628 + 20p = 4630
-  trail_price updated = 4628
-
-Price → 4610 (18p below 4628 → trail!)
-  New SL = 4610 + 20p = 4612
-  → Minimum profit locked: entry−4612 = 39p</div>
-      </div>
-    </div>
-    <div class="guard-card info" id="gc-dca">
-      <div class="g-title">DCA Sub-Splitting</div>
-      <div class="g-threshold" id="gc-dca-thresh">—</div>
-      <div class="g-live na" id="gc-dca-live">Calculated per signal</div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Weighted lot split: L1 gets 30% of total lot, remaining 70% shared equally across L2+. Each layer sub-splits into orders with TPs distributed in thirds: TP1 (quick), TP2 (medium), Runner (no TP).
-        <div class="scenario">Weighted split (L1_LOT_RATIO = 30%):
-  Total 0.09 lot, 3 layers:
-  L1 = 0.09 × 30% = 0.03 → 3 sub-orders × 0.01
-  L2 = 0.09 × 35% = 0.03 → 3 sub-orders × 0.01
-  L3 = 0.09 × 35% = 0.03 → skipped (runway)
-
-TP thirds per layer:
-  1 split:  1×TP1
-  2 splits: 1×TP1, 1×TP2
-  3 splits: 1×TP1, 1×TP2, 1×Runner
-  4 splits: 1×TP1, 2×TP2, 1×Runner
-Runner = no TP, rides with trailing stop + BE</div>
-      </div>
-    </div>
-    <div class="guard-card info" id="gc-dynamic-gap">
-      <div class="g-title">DCA Gap & Runway</div>
-      <div class="g-threshold" id="gc-dynamic-gap-thresh">—</div>
-      <div class="g-live na" id="gc-dynamic-gap-live">Applied per DCA session</div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Layer gap scales with SL size instead of using a fixed pip distance. Runway guard skips any layer whose trigger is too close to SL — prevents entries with no room to breathe.
-        <div class="scenario">Dynamic gap: gap = SL × ratio
-  50p SL × 0.40 = 20p gap between layers
-  40p SL × 0.40 = 16p gap
-
-Runway guard: skip if trigger < min runway from SL
-  L3 trigger = entry - 40p, SL = entry - 50p
-  Runway = 10p < 25p minimum → L3 SKIPPED
-
-If L2_GAP_RATIO = 0 → falls back to fixed LAYER2_PIPS</div>
-      </div>
-    </div>
-    <div class="guard-card info" id="gc-trend">
-      <div class="g-title">Trend Filter</div>
-      <div class="g-threshold" id="gc-trend-thresh">—</div>
-      <div class="g-live na" id="gc-trend-live">Background watcher</div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Analyzes H1 + H4 direction using EMA crossover, RSI, and candle structure. Auto-alerts on direction changes. Manual trades (/buynow /sellnow) warn if opposing trend — CONFIRM or CANCEL.
-        <div class="scenario">Indicators (2/3 agree = direction):
-  EMA 9/21 crossover
-  RSI 14 (>55 bull, <45 bear)
-  3-bar HH/HL structure
-
-/buynow when H1=BEAR, H4=BEAR:
-  → Warning: "H1: BEAR | H4: BEAR — opposing BUY"
-  → [CONFIRM] [CANCEL] buttons
-  → CONFIRM executes against trend
-  → CANCEL aborts trade
-
-Hafiz signals: NO trend check (fully automatic)
-/trend command: shows M5/M15/H1/H4 table</div>
-      </div>
-    </div>
-    <div class="guard-card info" id="gc-fib-guard">
-      <div class="g-title">Fib Retracement Guard</div>
-      <div class="g-threshold" id="gc-fib-guard-thresh">—</div>
-      <div class="g-live na" id="gc-fib-guard-live">Checked on manual trades</div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Checks if price is in the 0–38.2% Fibonacci retracement zone of the last opposite H1 candle. Ensures you're buying dips and selling rallies — not chasing.
-        <div class="scenario">BUY check:
-  Find last bearish H1 candle (close < open)
-  0% = candle low (best buy), 100% = candle high
-  Price at 15% → ✅ in zone (buying the dip)
-  Price at 60% → ❌ above 38.2% (chasing)
-
-SELL check:
-  Find last bullish H1 candle (close > open)
-  0% = candle high (best sell), 100% = candle low
-  Price at 10% → ✅ in zone (selling the rally)
-
-Outside zone → CONFIRM/CANCEL warning
-Combined with trend warning into single message</div>
-      </div>
-    </div>
-    <div class="guard-card info" id="gc-fib-scanner">
-      <div class="g-title">Fib Entry Scanner</div>
-      <div class="g-threshold" id="gc-fib-scanner-thresh">—</div>
-      <div class="g-live na" id="gc-fib-scanner-live">Background scanner</div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Background loop that auto-detects when price enters a Fib pullback zone. Sends Telegram alert with BUY NOW / SELL NOW / DISMISS buttons. One alert per direction per H1 candle (cooldown).
-        <div class="scenario">Every 60s: scan BUY + SELL fib zones
-  Price enters 0–38.2% of last bearish H1 candle
-  → 📊 Fib Entry Alert — 🟢 BUY zone
-  → XAUUSD @ 4820.50 | Fib: 12% ✅
-  → Trend: H1 BULL ✅ | H4 BULL ✅
-  → [🟢 BUY NOW] [❌ DISMISS]
-
-BUY NOW tapped:
-  → Re-validates fib zone at current price
-  → If still in zone → execute via DCA pipeline
-  → If moved out → CONFIRM/CANCEL warning
-
-Cooldown: 1 alert per (direction, candle) pair
-Stale cleanup: 30min pending, 24h cooldown</div>
-      </div>
-    </div>
-    <div class="guard-card info" id="gc-manual">
-      <div class="g-title">Manual Trade</div>
-      <div class="g-threshold" id="gc-manual-thresh">—</div>
-      <div class="g-live na" id="gc-manual-live">/buynow · /sellnow</div>
-      <div class="g-toggle" onclick="toggleDetail(this)">details</div>
-      <div class="g-detail">
-        Instant market entry with fixed SL/TP pip distances. Separate risk allocation from Hafiz signals. Runs through same DCA pipeline — all guards (session filter bypassed), layered entry, sub-splitting, profit lock + trailing stop.
-        <div class="scenario">/buynow flow:
-  1. Get current ask price from MT5
-  2. Calculate SL/TP from fixed pip distances
-  3. Check trend (H1+H4) — warn if opposing
-  4. Check fib (H1) — warn if outside 38.2%
-  5. If warnings → CONFIRM/CANCEL
-  6. Execute immediately (session filter bypassed)
-  7. DCA layers (30/70 weighted) + sub-splits
-  8. Profit lock → trailing stop monitors
-
-Risk: separate MANUAL_RISK_PERCENT (not Hafiz's)
-Does NOT affect Hafiz signal flow</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── AutoZone Section ──────────────────────────────────────── -->
-  <div class="section-title" style="margin-top:8px;" id="map-section-title">AutoZone</div>
-  <div id="map-snr-bar"></div>
-  <div class="zone-cards" id="zone-cards">
-    <div style="color:#aaa;font-size:0.85rem;padding:12px;">Loading...</div>
-  </div>
-
-  <!-- Guard fire log -->
-  <div class="section-title">Guard Fire Log</div>
-  <div class="table-wrap" style="margin-bottom:28px;">
-    <table>
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Guard</th>
-          <th>Symbol</th>
-          <th>Direction</th>
-          <th>Actual</th>
-          <th>Required</th>
-          <th>Reason</th>
-        </tr>
-      </thead>
-      <tbody id="guard-log-body">
-        <tr><td colspan="7" class="empty">Loading…</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Signal Log Table -->
-  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-    <div class="section-title" style="margin-bottom:0;">Signal Log</div>
-    <span id="signal-period-label" style="font-size:0.78rem;color:#6b7280;font-weight:500;"></span>
-  </div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Symbol</th>
-          <th>Direction</th>
-          <th>Entry Zone</th>
-          <th>SL</th>
-          <th>TPs</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody id="signal-table-body">
-        <tr><td colspan="7" class="empty">Loading signals...</td></tr>
-      </tbody>
-    </table>
-  </div>
-
-</div>
+  </main>
 
 <script>
-  // ── Date filter state (default: today) ───────────────────────────
-  function todayStr() { return new Date().toISOString().split('T')[0]; }
-  let filterFrom = todayStr();
-  let filterTo   = todayStr();
+function todayStr() { return new Date().toISOString().split('T')[0]; }
+let filterFrom = todayStr(), filterTo = todayStr();
 
-  function buildParams() {
-    const p = new URLSearchParams();
-    if (filterFrom) p.set('date_from', filterFrom);
-    if (filterTo)   p.set('date_to',   filterTo);
-    return p.toString() ? '?' + p.toString() : '';
-  }
+function buildParams() {
+  const p = new URLSearchParams();
+  if (filterFrom) p.set('date_from', filterFrom);
+  if (filterTo) p.set('date_to', filterTo);
+  return p.toString() ? '?' + p.toString() : '';
+}
 
-  function setQuickFilter(period) {
-    const today = todayStr();
-    ['today','yesterday','week','all'].forEach(k => {
-      document.getElementById('qb-' + k).classList.remove('active');
-    });
-    document.getElementById('qb-' + period).classList.add('active');
-
-    if (period === 'today') {
-      filterFrom = filterTo = today;
-    } else if (period === 'yesterday') {
-      const d = new Date(); d.setDate(d.getDate() - 1);
-      filterFrom = filterTo = d.toISOString().split('T')[0];
-    } else if (period === 'week') {
-      const d = new Date();
-      const diff = d.getDay() === 0 ? 6 : d.getDay() - 1;
-      d.setDate(d.getDate() - diff);
-      filterFrom = d.toISOString().split('T')[0];
-      filterTo   = today;
-    } else {
-      filterFrom = filterTo = null;
-    }
-    document.getElementById('filter-from').value = filterFrom || '';
-    document.getElementById('filter-to').value   = filterTo   || '';
-    loadStats();
-    loadSignals();
-  }
-
-  function setCustomFilter() {
-    filterFrom = document.getElementById('filter-from').value || null;
-    filterTo   = document.getElementById('filter-to').value   || null;
-    ['today','yesterday','week','all'].forEach(k => {
-      document.getElementById('qb-' + k).classList.remove('active');
-    });
-    loadStats();
-    loadSignals();
-  }
-
-  function updatePeriodLabel() {
-    const el = document.getElementById('signal-period-label');
-    if (!filterFrom && !filterTo) {
-      el.textContent = 'All Time';
-    } else if (filterFrom === filterTo) {
-      const d = new Date(filterFrom + 'T00:00:00');
-      el.textContent = d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-    } else {
-      const fmt = d => new Date(d + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-      el.textContent = `${fmt(filterFrom)} – ${fmt(filterTo || todayStr())}`;
-    }
-  }
-
-  // ── Formatting helpers ────────────────────────────────────────────
-  function fmt(n, dp = 2) {
-    return n !== null && n !== undefined ? Number(n).toFixed(dp) : '—';
-  }
-
-  function fmtTime(s) {
-    if (!s) return '—';
-    // Trim seconds: "2026-03-17 06:26:47" → "2026-03-17 06:26"
-    return s.slice(0, 16);
-  }
-
-  function statusBadge(s) {
-    return `<span class="badge ${s}">${s}</span>`;
-  }
-
-  function dirBadge(d) {
-    return `<span class="badge ${d}">${d.toUpperCase()}</span>`;
-  }
-
-  function outcomeBadge(o) {
-    if (!o) return '<span class="badge open">Open</span>';
-    return `<span class="badge ${o}">${o.toUpperCase()}</span>`;
-  }
-
-  function entryBadge(mode, layerNum) {
-    if (mode === 'layered_dca') return `<span class="badge dca">DCA L${layerNum || '?'}</span>`;
-    if (mode === 'mapped')      return `<span class="badge mapped">MAP${layerNum ? ' L'+layerNum : ''}</span>`;
-    if (mode === 'manual')      return `<span class="badge manual">MANUAL${layerNum ? ' L'+layerNum : ''}</span>`;
-    if (mode === 'direct')      return `<span class="badge direct">DIRECT</span>`;
-    return '';
-  }
-
-  function loadStats() {
-    fetch('/api/stats' + buildParams())
-      .then(r => r.json())
-      .then(d => {
-        document.getElementById('total-signals').textContent = d.total_signals;
-        document.getElementById('executed').textContent      = d.executed;
-        document.getElementById('skipped').textContent       = d.skipped;
-        document.getElementById('expired').textContent       = d.expired;
-        document.getElementById('open-trades').textContent   = d.open_trades;
-        document.getElementById('win-rate').textContent      = d.win_rate + '%';
-        document.getElementById('wins').textContent          = d.wins;
-        document.getElementById('losses').textContent        = d.losses;
-
-        const pnl = d.total_profit;
-        const el  = document.getElementById('total-profit');
-        el.textContent  = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
-        el.className    = 'val ' + (pnl >= 0 ? 'pos' : 'neg');
-      });
-  }
-
-  function loadSignals() {
-    updatePeriodLabel();
-    fetch('/api/signals' + buildParams())
-      .then(r => r.json())
-      .then(rows => {
-        const tbody = document.getElementById('signal-table-body');
-        if (!rows.length) {
-          tbody.innerHTML = '<tr><td colspan="7" class="empty">No signals yet. Waiting for signals from the group...</td></tr>';
-          return;
-        }
-
-        let html = '';
-        rows.forEach(s => {
-          const entry = s.entry_low === s.entry_high
-            ? fmt(s.entry_low, 2)
-            : `${fmt(s.entry_low, 2)} – ${fmt(s.entry_high, 2)}`;
-
-          const tpsStr = Array.isArray(s.tps)
-            ? s.tps.map((t, i) => `TP${i+1}: ${fmt(t, 2)}`).join(' &nbsp;')
-            : '—';
-
-          html += `
-            <tr>
-              <td>${fmtTime(s.received_at)}</td>
-              <td><strong>${s.symbol}</strong></td>
-              <td>${dirBadge(s.direction)}</td>
-              <td>${entry}</td>
-              <td>${fmt(s.sl, 2)}</td>
-              <td class="tps">${tpsStr}</td>
-              <td>${statusBadge(s.status)}</td>
-            </tr>`;
-
-          if (s.ticket) {
-            const prof = s.profit !== null
-              ? `<strong style="color:${s.profit >= 0 ? '#16a34a' : '#dc2626'}">${s.profit >= 0 ? '+' : ''}$${fmt(s.profit, 2)}</strong>`
-              : '—';
-            html += `
-              <tr class="trade-row">
-                <td colspan="7">
-                  &nbsp;&nbsp;🎫 Ticket: <strong>${s.ticket}</strong>
-                  ${entryBadge(s.entry_mode, s.layer_num)}
-                  &nbsp;|&nbsp; Lot: ${fmt(s.lot, 2)}
-                  &nbsp;|&nbsp; Entry: ${fmt(s.entry_price, 2)}
-                  &nbsp;|&nbsp; Outcome: ${outcomeBadge(s.outcome)}
-                  ${s.profit !== null ? `&nbsp;|&nbsp; P&L: ${prof}` : ''}
-                  ${s.close_price ? `&nbsp;|&nbsp; Close: ${fmt(s.close_price, 2)}` : ''}
-                  ${s.closed_at ? `&nbsp;|&nbsp; Closed: ${fmtTime(s.closed_at)}` : ''}
-                </td>
-              </tr>`;
-          }
-        });
-
-        tbody.innerHTML = html;
-      });
-  }
-
-  // ── Toggle guard detail panels ──────────────────────────────────
-  function toggleDetail(el) {
-    const detail = el.nextElementSibling;
-    const isOpen = detail.classList.toggle('show');
-    el.textContent = isOpen ? 'hide details' : 'details';
-  }
-
-  // ── Guard label map ──────────────────────────────────────────────
-  const GUARD_LABELS = {
-    session:   'Session Filter',
-    margin:    'Margin Level',
-    stack:     'Direction Stack',
-    rr_ratio:  'RR Ratio',
-    spread:    'Spread',
-    proximity: 'Proximity',
-    lot_calc:  'Lot Calc',
-  };
-
-  function guardBadge(name) {
-    const label = GUARD_LABELS[name] || name;
-    return `<span class="badge ${name}">${label}</span>`;
-  }
-
-  function dirBadgeSmall(d) {
-    if (!d) return '—';
-    return `<span class="badge ${d}">${d.toUpperCase()}</span>`;
-  }
-
-  // ── Load guard configuration ─────────────────────────────────────
-  function loadGuardConfig() {
-    fetch('/api/guards/config')
-      .then(r => r.json())
-      .then(d => {
-        const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-
-        // Session filter card
-        set('gc-session-thresh', d.session_filter?.threshold || '—');
-        if (d.session_filter) {
-          const now_utc = new Date().getUTCHours();
-          const s = d.session_filter.start_utc, e = d.session_filter.end_utc;
-          const inSession = s <= e ? (now_utc >= s && now_utc < e) : (now_utc >= s || now_utc < e);
-          const scEl = document.getElementById('gc-session');
-          const slEl = document.getElementById('gc-session-live');
-          const ssEl = document.getElementById('gc-session-status');
-          if (!d.session_filter.enabled) {
-            slEl.textContent = 'Disabled'; slEl.className = 'g-live na';
-          } else if (inSession) {
-            slEl.textContent = 'In session'; slEl.className = 'g-live ok';
-            ssEl.textContent = '✓ PASS'; ssEl.className = 'g-status ok';
-            scEl.classList.add('pass');
-          } else {
-            slEl.textContent = 'Outside session'; slEl.className = 'g-live bad';
-            ssEl.textContent = '✗ BLOCK'; ssEl.className = 'g-status bad';
-            scEl.classList.add('block');
-          }
-        }
-
-        set('gc-margin-thresh',    d.margin?.threshold    || '—');
-        set('gc-stack-thresh',     d.stack?.threshold     || '—');
-        set('gc-rr_ratio-thresh',  d.rr_ratio?.threshold  || '—');
-        set('gc-spread-thresh',    d.spread?.threshold    || '—');
-        set('gc-proximity-thresh', d.proximity?.threshold || '—');
-        set('gc-lot_calc-thresh',  d.lot_calc?.threshold  || '—');
-        set('gc-risk-thresh',      d.risk?.threshold      || '—');
-        set('gc-autotp-thresh',    d.auto_tp?.threshold   || '—');
-
-        set('gc-profitlock-thresh', d.profit_lock?.threshold || '—');
-        if (d.profit_lock && !d.profit_lock.enabled)
-          set('gc-profitlock-live', 'Disabled');
-
-        set('gc-trail-thresh', d.trail?.threshold || '—');
-        if (d.trail && !d.trail.enabled)
-          set('gc-trail-live', 'Disabled');
-
-        // DCA config card
-        set('gc-dca-thresh', d.dca?.threshold || '—');
-        if (d.dca && !d.dca.enabled)
-          set('gc-dca-live', 'DCA Disabled (single entry mode)');
-
-        set('gc-dynamic-gap-thresh', d.dynamic_gap?.threshold || '—');
-        if (d.dynamic_gap && !d.dynamic_gap.enabled)
-          set('gc-dynamic-gap-live', `Fixed ${d.dynamic_gap?.fallback_pips}p gap`);
-
-        set('gc-trend-thresh', d.trend?.threshold || '—');
-        if (d.trend && !d.trend.enabled) set('gc-trend-live', 'Disabled');
-
-        set('gc-fib-guard-thresh', d.fib_guard?.threshold || '—');
-        if (d.fib_guard && !d.fib_guard.enabled) set('gc-fib-guard-live', 'Disabled');
-
-        set('gc-fib-scanner-thresh', d.fib_scanner?.threshold || '—');
-        if (d.fib_scanner && !d.fib_scanner.enabled) set('gc-fib-scanner-live', 'Disabled');
-
-        set('gc-manual-thresh', d.manual_trade?.threshold || '—');
-
-        // Environment badge
-        const envBadge = document.getElementById('env-badge');
-        if (d.env_mode === 'live') {
-          envBadge.textContent = 'LIVE'; envBadge.className = 'badge env-live';
-        } else {
-          envBadge.textContent = 'DEMO'; envBadge.className = 'badge env-demo';
-        }
-
-        // Stack guard: grey out if disabled
-        if (d.stack && !d.stack.enabled) {
-          document.getElementById('gc-stack').classList.add('info');
-          set('gc-stack-live', 'Disabled');
-          set('gc-stack-status', '');
-        }
-      });
-  }
-
-  // ── Load live MT5 account health ──────────────────────────────────
-  function loadGuardLive() {
-    fetch('/api/guards/live')
-      .then(r => r.json())
-      .then(d => {
-        if (d.error) {
-          document.getElementById('acc-balance').textContent = 'MT5 offline';
-          return;
-        }
-
-        // Account bar
-        document.getElementById('acc-balance').textContent     = d.balance !== null ? '$' + d.balance.toLocaleString(undefined, {minimumFractionDigits:2}) : '—';
-        document.getElementById('acc-equity').textContent      = d.equity  !== null ? '$' + d.equity.toLocaleString(undefined,  {minimumFractionDigits:2}) : '—';
-        document.getElementById('acc-free').textContent        = d.free_margin !== null ? '$' + d.free_margin.toLocaleString(undefined, {minimumFractionDigits:2}) : '—';
-
-        const mlEl = document.getElementById('acc-margin-level');
-        if (d.margin_level !== null) {
-          mlEl.textContent = d.margin_level + '%';
-          mlEl.style.color = d.margin_level_ok ? '#16a34a' : '#dc2626';
-        } else {
-          mlEl.textContent = 'No open trades';
-          mlEl.style.color = '#16a34a';
-        }
-
-        const spEl = document.getElementById('acc-spread');
-        if (d.spread_pips !== null) {
-          spEl.textContent = d.spread_pips + ' pips';
-          spEl.style.color = d.spread_ok ? '#16a34a' : '#dc2626';
-        } else {
-          spEl.textContent = '—';
-        }
-
-        // Margin guard card
-        const mgCard  = document.getElementById('gc-margin');
-        const mgLive  = document.getElementById('gc-margin-live');
-        const mgStat  = document.getElementById('gc-margin-status');
-        if (d.margin_level !== null) {
-          mgLive.textContent  = d.margin_level + '%';
-          mgLive.className    = 'g-live ' + (d.margin_level_ok ? 'ok' : 'bad');
-          mgStat.textContent  = d.margin_level_ok ? '✓ PASS' : '✗ BLOCK';
-          mgStat.className    = 'g-status ' + (d.margin_level_ok ? 'ok' : 'bad');
-          mgCard.classList.add(d.margin_level_ok ? 'pass' : 'block');
-        } else {
-          mgLive.textContent = 'No open trades';
-          mgLive.className   = 'g-live ok';
-          mgStat.textContent = '✓ PASS';
-          mgStat.className   = 'g-status ok';
-          mgCard.classList.add('pass');
-        }
-
-        // Spread guard card
-        const spCard = document.getElementById('gc-spread');
-        const spLive = document.getElementById('gc-spread-live');
-        const spStat = document.getElementById('gc-spread-status');
-        if (d.spread_pips !== null) {
-          spLive.textContent = d.spread_pips + ' pips';
-          spLive.className   = 'g-live ' + (d.spread_ok ? 'ok' : 'bad');
-          spStat.textContent = d.spread_ok ? '✓ PASS' : '✗ BLOCK';
-          spStat.className   = 'g-status ' + (d.spread_ok ? 'ok' : 'bad');
-          spCard.classList.add(d.spread_ok ? 'pass' : 'block');
-        }
-
-        // DCA estimate from live margin
-        const dcaItem = document.getElementById('dca-estimate-item');
-        const dcaEl   = document.getElementById('acc-dca-estimate');
-        const dcaLive = document.getElementById('gc-dca-live');
-        if (d.dca_estimate) {
-          const e = d.dca_estimate;
-          const txt = `${e.layers}L · L1:${e.l1_lot}(${e.l1_splits}s) L2+:${e.ln_lot}(${e.ln_splits}s) = ${e.total_orders} orders`;
-          dcaEl.textContent = txt;
-          dcaItem.style.display = '';
-          if (dcaLive && dcaLive.textContent === 'Calculated per signal') {
-            dcaLive.textContent = `${e.total_lot} lot → L1=${e.l1_lot}×${e.l1_splits} | L2+=${e.ln_lot}×${e.ln_splits}`;
-            dcaLive.className = 'g-live ok';
-          }
-        } else {
-          dcaItem.style.display = 'none';
-        }
-      })
-      .catch(() => {
-        document.getElementById('acc-balance').textContent = 'MT5 offline';
-      });
-  }
-
-  // ── Load guard fire log ───────────────────────────────────────────
-  function loadGuardLog() {
-    fetch('/api/guards/log')
-      .then(r => r.json())
-      .then(rows => {
-        const tbody = document.getElementById('guard-log-body');
-        if (!rows.length) {
-          tbody.innerHTML = '<tr><td colspan="7" class="empty">No guard events yet — all signals have passed cleanly.</td></tr>';
-          return;
-        }
-        let html = '';
-        rows.forEach(g => {
-          html += `
-            <tr>
-              <td>${fmtTime(g.fired_at)}</td>
-              <td>${guardBadge(g.guard_name)}</td>
-              <td><strong>${g.symbol || '—'}</strong></td>
-              <td>${dirBadgeSmall(g.direction)}</td>
-              <td style="color:#dc2626;font-weight:600">${g.value_actual || '—'}</td>
-              <td style="color:#16a34a">${g.value_required || '—'}</td>
-              <td style="color:#555;font-size:0.8rem">${g.reason || '—'}</td>
-            </tr>`;
-        });
-        tbody.innerHTML = html;
-      });
-  }
-
-  // ── Load mapping zones ───────────────────────────────────────────
-  function loadZones() {
-    fetch('/api/zones')
-      .then(r => r.json())
-      .then(d => {
-        const title = document.getElementById('map-section-title');
-        if (!d.enabled) {
-          title.textContent = 'AutoZone (Disabled)';
-          document.getElementById('zone-cards').innerHTML =
-            '<div style="color:#aaa;font-size:0.85rem;padding:12px;">MAP_ENABLED=false</div>';
-          document.getElementById('map-snr-bar').innerHTML = '';
-          return;
-        }
-
-        title.textContent = 'AutoZone';
-
-        // SNR levels
-        const snrBar = document.getElementById('map-snr-bar');
-        let snrHtml = '';
-        for (const [sym, levels] of Object.entries(d.snr_levels || {})) {
-          if (levels.length) {
-            snrHtml += `<div style="margin-bottom:6px;"><strong style="font-size:0.78rem;color:#555;">${sym} SNR:</strong> <div class="snr-chips" style="display:inline-flex;">`;
-            levels.forEach(p => {
-              const v = p === Math.floor(p) ? p.toFixed(0) : p.toString();
-              snrHtml += `<span class="snr-chip">${v}</span>`;
-            });
-            snrHtml += '</div></div>';
-          }
-        }
-        snrBar.innerHTML = snrHtml;
-
-        // Zone cards
-        const container = document.getElementById('zone-cards');
-        if (!d.zones.length) {
-          container.innerHTML = '<div style="color:#aaa;font-size:0.85rem;padding:12px;">No AutoZone zones. Send /map via Telegram to add zones.</div>';
-          return;
-        }
-
-        let html = '';
-        d.zones.forEach(z => {
-          const dirClass = z.direction === 'buy' ? 'buy-zone' : 'sell-zone';
-          const firedClass = z.fired ? 'is-fired' : '';
-          const dirBadge = z.direction === 'buy'
-            ? '<span class="badge buy">BUY</span>'
-            : '<span class="badge sell">SELL</span>';
-          const statusBadge = z.fired
-            ? '<span class="badge fired">Fired</span>'
-            : '<span class="badge watching">Watching</span>';
-
-          html += `
-            <div class="zone-card ${dirClass} ${firedClass}">
-              <div class="zc-header">
-                <span class="zc-title">#${z.id} ${z.symbol} ${dirBadge}</span>
-                ${statusBadge}
-              </div>
-              <div class="zc-detail">Zone: ${fmt(z.zone_low)}\u2013${fmt(z.zone_high)}</div>
-              <div class="zc-detail">SL: ${fmt(z.sl)} | TP: ${fmt(z.tp)}</div>
-              ${z.signal_id ? `<div class="zc-detail">Signal: ${z.signal_id}</div>` : ''}
-            </div>`;
-        });
-        container.innerHTML = html;
-      })
-      .catch(() => {
-        document.getElementById('zone-cards').innerHTML =
-          '<div style="color:#aaa;font-size:0.85rem;padding:12px;">Could not load zones.</div>';
-      });
-  }
-
-  function loadAll() {
-    loadStats();
-    loadSignals();
-    loadGuardConfig();
-    loadGuardLive();
-    loadGuardLog();
-    loadZones();
-    document.getElementById('last-updated').textContent =
-      'Last updated: ' + new Date().toLocaleTimeString();
-  }
-
-  // Init date inputs to today
-  document.getElementById('filter-from').value = filterFrom;
-  document.getElementById('filter-to').value   = filterTo;
-
+function setQuickFilter(period) {
+  const today = todayStr();
+  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('bg-gray-800', 'text-white'));
+  event.target.classList.add('bg-gray-800', 'text-white');
+  
+  if (period === 'today') { filterFrom = filterTo = today; }
+  else if (period === 'yesterday') {
+    const d = new Date(); d.setDate(d.getDate() - 1);
+    filterFrom = filterTo = d.toISOString().split('T')[0];
+  } else if (period === 'week') {
+    const d = new Date(); const diff = d.getDay() === 0 ? 6 : d.getDay() - 1;
+    d.setDate(d.getDate() - diff);
+    filterFrom = d.toISOString().split('T')[0];
+    filterTo = today;
+  } else { filterFrom = filterTo = null; }
+  
+  document.getElementById('filter-from').value = filterFrom || '';
+  document.getElementById('filter-to').value = filterTo || '';
   loadAll();
-  setInterval(loadAll, 30000);  // auto-refresh every 30 seconds
-</script>
+}
 
+function setCustomFilter() {
+  filterFrom = document.getElementById('filter-from').value || null;
+  filterTo = document.getElementById('filter-to').value || null;
+  loadAll();
+}
+
+function fmt(n, dp=2) { return n != null ? Number(n).toFixed(dp) : '—'; }
+function fmtTime(s) { return s ? s.slice(0, 16) : '—'; }
+function statusBadge(s) { return '<span class="badge ' + s + '">' + s + '</span>'; }
+function dirBadge(d) { return '<span class="badge ' + d + '">' + d.toUpperCase() + '</span>'; }
+function outcomeBadge(o) { return o ? '<span class="badge ' + o + '">' + o.toUpperCase() + '</span>' : '<span class="badge open">Open</span>'; }
+function entryBadge(mode, layer) {
+  if (mode === 'layered_dca') return '<span class="badge dca">DCA L' + (layer||'?') + '</span>';
+  if (mode === 'mapped') return '<span class="badge mapped">MAP</span>';
+  if (mode === 'manual') return '<span class="badge manual">MANUAL</span>';
+  return '';
+}
+
+function toggleDetail(btn) {
+  const detail = btn.nextElementSibling;
+  const isOpen = detail.classList.toggle('show');
+  btn.textContent = isOpen ? 'Hide details' : 'Show details';
+}
+
+function loadStats() {
+  fetch('/api/stats' + buildParams()).then(r => r.json()).then(d => {
+    document.getElementById('total-signals').textContent = d.total_signals;
+    document.getElementById('executed').textContent = d.executed;
+    document.getElementById('skipped').textContent = d.skipped;
+    document.getElementById('expired').textContent = d.expired;
+    document.getElementById('open-trades').textContent = d.open_trades;
+    document.getElementById('win-rate').textContent = d.win_rate + '%';
+    document.getElementById('wins').textContent = d.wins;
+    document.getElementById('losses').textContent = d.losses;
+    const pnl = d.total_profit;
+    const el = document.getElementById('total-profit');
+    el.textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+    el.className = 'text-xl font-bold ' + (pnl >= 0 ? 'text-green-600' : 'text-red-600');
+  });
+}
+
+function loadSignals() {
+  fetch('/api/signals' + buildParams(), { cache: 'no-cache' }).then(r => r.json()).then(rows => {
+    console.log('Signals data:', rows.length, 'rows');
+    const tbody = document.getElementById('signal-table-body');
+    // Filter out expired and limit to last 20
+    const filtered = rows.filter(r => r.status !== 'expired').slice(0, 20).reverse();
+    if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-500">No signals</td></tr>'; return; }
+    let html = '';
+    filtered.forEach(s => {
+      const entry = s.entry_low === s.entry_high ? fmt(s.entry_low,2) : fmt(s.entry_low,2) + ' – ' + fmt(s.entry_high,2);
+      const tpsStr = Array.isArray(s.tps) ? s.tps.map((t,i) => 'TP'+(i+1)+': '+fmt(t,2)).join(' | ') : '—';
+      html += '<tr><td class="px-4 py-2">' + fmtTime(s.received_at) + '</td><td class="px-4 py-2 font-semibold">' + s.symbol + '</td><td class="px-4 py-2">' + dirBadge(s.direction) + '</td><td class="px-4 py-2">' + entry + '</td><td class="px-4 py-2">' + fmt(s.sl,2) + '</td><td class="px-4 py-2 text-gray-600">' + tpsStr + '</td><td class="px-4 py-2">' + statusBadge(s.status) + '</td></tr>';
+      if (s.ticket) {
+        const prof = s.profit != null ? '<strong class="' + (s.profit >= 0 ? 'text-green-600' : 'text-red-600') + '">' + (s.profit >= 0 ? '+' : '') + '$' + fmt(s.profit,2) + '</strong>' : '—';
+        html += '<tr class="bg-gray-50"><td colspan="7" class="px-4 py-2 text-sm">';
+        html += 'Ticket: <strong>' + s.ticket + '</strong> ' + entryBadge(s.entry_mode, s.layer_num);
+        html += ' | Lot: ' + fmt(s.lot,2) + ' | Entry: ' + fmt(s.entry_price,2) + ' | ' + outcomeBadge(s.outcome);
+        if (s.profit != null) html += ' | P&L: ' + prof;
+        html += '</td></tr>';
+      }
+    });
+    tbody.innerHTML = html;
+    
+    const el = document.getElementById('signal-period-label');
+    if (!filterFrom && !filterTo) el.textContent = 'All Time';
+    else if (filterFrom === filterTo) el.textContent = new Date(filterFrom + 'T00:00:00').toLocaleDateString();
+    else el.textContent = filterFrom + ' – ' + (filterTo || todayStr());
+  });
+}
+
+function loadGuardConfig() {
+  fetch('/api/guards/config').then(r => r.json()).then(d => {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    set('gc-session-thresh', d.session_filter?.threshold || '—');
+    set('gc-margin-thresh', d.margin?.threshold || '—');
+    set('gc-stack-thresh', d.stack?.threshold || '—');
+    set('gc-rr_ratio-thresh', d.rr_ratio?.threshold || '—');
+    set('gc-spread-thresh', d.spread?.threshold || '—');
+    set('gc-proximity-thresh', d.proximity?.threshold || '—');
+    set('gc-lot_calc-thresh', d.lot_calc?.threshold || '—');
+    set('gc-dca-thresh', d.dca?.threshold || '—');
+    set('gc-profitlock-thresh', d.profit_lock?.threshold || '—');
+    set('gc-trail-thresh', d.trail?.threshold || '—');
+    set('gc-daily-loss-thresh', 'MAX_DAILY_LOSS_USD');
+    
+    const envBadge = document.getElementById('env-badge');
+    if (d.env_mode === 'live') { envBadge.textContent = 'LIVE'; envBadge.className = 'badge bg-red-100 text-red-800'; }
+    else { envBadge.textContent = 'DEMO'; envBadge.className = 'badge bg-green-100 text-green-800'; }
+  });
+}
+
+function loadGuardLive() {
+  fetch('/api/guards/live').then(r => r.json()).then(d => {
+    if (d.error) {
+      document.getElementById('acc-balance').textContent = 'MT5 offline';
+      return;
+    }
+    document.getElementById('acc-balance').textContent = '$' + (d.balance||0).toLocaleString();
+    document.getElementById('acc-equity').textContent = '$' + (d.equity||0).toLocaleString();
+    document.getElementById('acc-free').textContent = '$' + (d.free_margin||0).toLocaleString();
+    
+    const mlEl = document.getElementById('acc-margin-level');
+    if (d.margin_level != null) {
+      mlEl.textContent = d.margin_level + '%';
+      mlEl.style.color = d.margin_level_ok ? '#10b981' : '#ef4444';
+    } else { mlEl.textContent = 'No trades'; }
+    
+    const spEl = document.getElementById('acc-spread');
+    if (d.spread_pips != null) {
+      spEl.textContent = d.spread_pips + ' pips';
+      spEl.style.color = d.spread_ok ? '#10b981' : '#ef4444';
+    } else { spEl.textContent = '—'; }
+    
+    // Update guard cards
+    const mgCard = document.getElementById('gc-margin'), mgLive = document.getElementById('gc-margin-live'), mgStat = document.getElementById('gc-margin-status');
+    if (d.margin_level != null) {
+      mgLive.textContent = d.margin_level + '%';
+      mgLive.style.color = d.margin_level_ok ? '#10b981' : '#ef4444';
+      mgStat.textContent = d.margin_level_ok ? '✓ PASS' : '✗ BLOCK';
+      mgStat.style.color = d.margin_level_ok ? '#10b981' : '#ef4444';
+      mgCard.className = 'card p-4 ' + (d.margin_level_ok ? 'guard-pass' : 'guard-block');
+    }
+    
+    const spCard = document.getElementById('gc-spread'), spLive = document.getElementById('gc-spread-live'), spStat = document.getElementById('gc-spread-status');
+    if (d.spread_pips != null) {
+      spLive.textContent = d.spread_pips + ' pips';
+      spLive.style.color = d.spread_ok ? '#10b981' : '#ef4444';
+      spStat.textContent = d.spread_ok ? '✓ PASS' : '✗ BLOCK';
+      spStat.style.color = d.spread_ok ? '#10b981' : '#ef4444';
+      spCard.className = 'card p-4 ' + (d.spread_ok ? 'guard-pass' : 'guard-block');
+    }
+    
+    // Session
+    fetch('/api/guards/config').then(r => r.json()).then(c => {
+      if (c.session_filter) {
+        const now = new Date().getUTCHours();
+        const s = c.session_filter.start_utc, e = c.session_filter.end_utc;
+        const inSession = s <= e ? (now >= s && now < e) : (now >= s || now < e);
+        const scEl = document.getElementById('gc-session'), slEl = document.getElementById('gc-session-live'), ssEl = document.getElementById('gc-session-status');
+        if (!c.session_filter.enabled) { slEl.textContent = 'Disabled'; slEl.style.color = '#9ca3af'; }
+        else if (inSession) { slEl.textContent = 'In session'; slEl.style.color = '#10b981'; ssEl.textContent = '✓ PASS'; ssEl.style.color = '#10b981'; scEl.className = 'card p-4 guard-pass'; }
+        else { slEl.textContent = 'Outside'; slEl.style.color = '#ef4444'; ssEl.textContent = '✗ BLOCK'; ssEl.style.color = '#ef4444'; scEl.className = 'card p-4 guard-block'; }
+      }
+    });
+  }).catch(() => {
+    document.getElementById('acc-balance').textContent = 'MT5 offline';
+  });
+}
+
+function loadGuardLog() {
+  fetch('/api/guards/log').then(r => r.json()).then(rows => {
+    const tbody = document.getElementById('guard-log-body');
+    const limited = rows.slice(0, 10); // Last 10 only
+    if (!limited.length) { tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-4 text-center text-gray-500">No guard events</td></tr>'; return; }
+    let html = '';
+    limited.forEach(g => {
+      html += '<tr><td class="px-4 py-2">' + fmtTime(g.fired_at) + '</td>';
+      html += '<td class="px-4 py-2"><span class="badge ' + g.guard_name + '">' + (g.guard_name || '—') + '</span></td>';
+      html += '<td class="px-4 py-2 font-semibold">' + (g.symbol || '—') + '</td>';
+      html += '<td class="px-4 py-2">' + (g.direction ? '<span class="badge ' + g.direction + '">' + g.direction.toUpperCase() + '</span>' : '—') + '</td>';
+      html += '<td class="px-4 py-2 text-red-600 font-semibold">' + (g.value_actual || '—') + '</td>';
+      html += '<td class="px-4 py-2 text-green-600">' + (g.value_required || '—') + '</td>';
+      html += '<td class="px-4 py-2 text-gray-600">' + (g.reason || '—') + '</td></tr>';
+    });
+    tbody.innerHTML = html;
+  });
+}
+
+function loadAll() {
+  loadStats();
+  loadSignals();
+  loadGuardConfig();
+  loadGuardLive();
+  loadGuardLog();
+  loadPerformance();
+  document.getElementById('last-updated').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+}
+
+let perfChart;
+function loadPerformance() {
+  fetch('/api/performance', { cache: 'no-cache' }).then(r => r.json()).then(d => {
+    console.log('Performance data:', d);
+    const ctx = document.getElementById('perfChart').getContext('2d');
+    if (perfChart) perfChart.destroy();
+    // Show demo data if all zeros
+    const hasData = d.pnl.some(v => v !== 0);
+    const pnl = hasData ? d.pnl : d.pnl.map(() => 0);
+    perfChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: d.labels,
+        datasets: [{
+          label: 'Daily P&L',
+          data: pnl,
+          backgroundColor: hasData ? pnl.map(v => v >= 0 ? '#22c55e' : '#ef4444') : '#e5e7eb',
+          borderRadius: 3,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { 
+          legend: { display: false },
+          title: { display: !hasData, text: 'No trade data yet', font: { size: 12 }, color: '#9ca3af' }
+        },
+        scales: {
+          x: { display: true, ticks: { font: { size: 9 }, maxTicksLimit: 10 } },
+          y: { display: true, ticks: { font: { size: 10 } } }
+        }
+      }
+    });
+  }).catch(e => {
+    console.error('Performance chart error:', e);
+    document.getElementById('perfChart').style.display = 'none';
+  });
+}
+
+document.getElementById('filter-from').value = filterFrom;
+document.getElementById('filter-to').value = filterTo;
+document.getElementById('filter-from').addEventListener('change', setCustomFilter);
+document.getElementById('filter-to').addEventListener('change', setCustomFilter);
+
+loadAll();
+setInterval(loadAll, 30000);
+</script>
 </body>
 </html>

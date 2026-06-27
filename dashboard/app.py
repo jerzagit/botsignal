@@ -205,7 +205,7 @@ def api_guards_config():
         "spread":    {"threshold": f"≤ {MAX_SPREAD_PIPS:.0f} pips",  "enabled": True},
         "proximity": {"threshold": f"≤ {ENTRY_MAX_DISTANCE_PIPS} pips", "enabled": True},
         "lot_calc":  {"threshold": f"{MIN_LOT}–{MAX_LOT} lot",       "enabled": True},
-        "risk":      {"threshold": f"{int(RISK_PERCENT*100)}% free margin"},
+        "risk":      {"threshold": "10% free margin @ 1000p benchmark"},
         "auto_tp":   {"threshold": f"SL < {SL_MIN_PIPS}p => TP set to {TP_ENFORCE_PIPS}p"},
         "profit_lock": {
             "threshold": f"+{PROFIT_LOCK_PIPS}p → BE + TP {PROFIT_LOCK_TP_PIPS}p",
@@ -393,6 +393,38 @@ def api_guards_log():
             "value_required": r["value_required"],
         })
     return jsonify(result)
+
+
+@app.route("/api/performance")
+def api_performance():
+    """Return daily P&L for the last 30 days for the performance chart."""
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT DATE(closed_at) AS day, profit
+            FROM trades
+            WHERE outcome IN ('win', 'loss')
+              AND closed_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+            ORDER BY day
+        """)
+        rows = cur.fetchall()
+    conn.close()
+
+    # Group by day
+    daily = {}
+    for r in rows:
+        d = r["day"].strftime("%Y-%m-%d")
+        daily[d] = daily.get(d, 0) + float(r["profit"])
+
+    # Fill in missing days with 0
+    from datetime import datetime, timedelta
+    days, pnl = [], []
+    for i in range(29, -1, -1):
+        dt = (datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d")
+        days.append(dt[5:])  # MM-DD
+        pnl.append(round(daily.get(dt, 0), 2))
+
+    return jsonify({"labels": days, "pnl": pnl})
 
 
 if __name__ == "__main__":
