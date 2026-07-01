@@ -649,7 +649,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                         session.sub_lots[next_idx],    # lot_override (sub-lot)
                         all_own,            # own_tickets (exempt from stack guard)
                         tp_val,             # tp_override -> single-order mode
-                        next_idx > 0,       # skip_proximity for L2+
+                        next_idx > 0 or entry_mode == "manual",  # skip proximity for manual
                         entry_mode,         # entry_mode ('layered_dca' or 'mapped')
                         layer_num,          # layer_num
                         _skip_rr,           # skip_rr_check for manual trades
