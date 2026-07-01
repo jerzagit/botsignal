@@ -828,8 +828,8 @@ async def handle_fib_alert_callback(query, context):
         return
 
     symbol_mt5 = MANUAL_SYMBOL + MT5_SYMBOL_SUFFIX
+    mt5_mod.symbol_select(symbol_mt5, True)
     tick = mt5_mod.symbol_info_tick(symbol_mt5)
-    mt5_mod.shutdown()
 
     if tick is None:
         await query.edit_message_text(f"\u274c Could not get price for {symbol_mt5}.")

@@ -59,11 +59,18 @@ def calculate_lot(signal: Signal, risk_override: float = None) -> tuple[float, s
     sym_info = mt5.symbol_info(sym_mt5)
     if sym_info is None:
         return 0.0, f"❌ Symbol {sym_mt5} not found."
+    if not sym_info.visible:
+        mt5.symbol_select(sym_mt5, True)
 
     tick_size  = sym_info.trade_tick_size
     tick_value = sym_info.trade_tick_value
     if tick_size == 0 or tick_value == 0:
-        return 0.0, f"❌ Could not get tick info for {signal.symbol}."
+        mt5.symbol_select(sym_mt5, True)
+        sym_info = mt5.symbol_info(sym_mt5)
+        tick_size  = sym_info.trade_tick_size
+        tick_value = sym_info.trade_tick_value
+        if tick_size == 0 or tick_value == 0:
+            return 0.0, f"❌ Could not get tick info for {signal.symbol}."
 
     sl_distance = abs(signal.entry_mid - signal.sl)
     if sl_distance == 0:

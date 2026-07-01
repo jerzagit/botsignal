@@ -79,6 +79,9 @@ def mt5_connect_test() -> tuple[bool, str]:
         f"Balance: ${info.balance:,.2f} | "
         f"Free margin: ${info.margin_free:,.2f}"
     )
+    from core.config import MANUAL_SYMBOL
+    sym = MANUAL_SYMBOL + MT5_SYMBOL_SUFFIX
+    mt5.symbol_select(sym, True)
     return True, msg
 
 
