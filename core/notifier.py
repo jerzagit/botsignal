@@ -11,6 +11,7 @@ import logging
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.request import HTTPXRequest
 
 from core.config import (
     BOT_TOKEN, YOUR_CHAT_ID, SIGNAL_EXPIRY, MAP_ENABLED,
@@ -970,7 +971,8 @@ async def cmd_trend(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start_notifier():
     global _app
-    _app = Application.builder().token(BOT_TOKEN).build()
+    request = HTTPXRequest(connect_timeout=30, read_timeout=30, write_timeout=30)
+    _app = Application.builder().token(BOT_TOKEN).request(request).build()
     _app.add_handler(CallbackQueryHandler(handle_callback))
     _app.add_handler(CommandHandler("snr", cmd_snr))
     _app.add_handler(CommandHandler("map", cmd_map))
