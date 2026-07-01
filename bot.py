@@ -231,13 +231,18 @@ async def main_async() -> int:
         return 1
 
     try:
-        ok, message = mt5_connect_test()
+        mt5_future = asyncio.ensure_future(
+            asyncio.get_event_loop().run_in_executor(None, mt5_connect_test)
+        )
+        app, (ok, message) = await asyncio.gather(
+            start_notifier(),
+            mt5_future,
+        )
         if not ok:
             log.error("MT5 connection failed: %s", message)
             return 1
         log.info("MT5 startup check OK: %s", message)
 
-        app = await start_notifier()
         bot = get_bot()
         tasks = _create_service_tasks(bot)
 

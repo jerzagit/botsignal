@@ -55,7 +55,7 @@ def mt5_connect() -> bool:
         return False
     if not mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
         log.error(f"MT5 login failed: {mt5.last_error()}")
-        mt5.shutdown()
+        _mt5_shutdown_orig()
         return False
     _mt5_connected = True
     return True

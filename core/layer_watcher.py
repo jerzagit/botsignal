@@ -649,7 +649,7 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                         session.sub_lots[next_idx],    # lot_override (sub-lot)
                         all_own,            # own_tickets (exempt from stack guard)
                         tp_val,             # tp_override -> single-order mode
-                        next_idx > 0,       # skip_proximity for L2+
+                        next_idx > 0 or entry_mode == "manual",  # skip proximity for manual
                         entry_mode,         # entry_mode ('layered_dca' or 'mapped')
                         layer_num,          # layer_num
                         _skip_rr,           # skip_rr_check for manual trades
@@ -658,6 +658,11 @@ async def watch_layered_entry(signal, signal_id: str, bot,
 
                     if "Trade Executed" in result:
                         ticket = _get_latest_ticket(signal_id, exclude=all_own)
+                        if not ticket:
+                            import re
+                            m = re.search(r"Ticket:\s*#?(\d+)", result)
+                            if m:
+                                ticket = int(m.group(1))
                         if ticket:
                             layer_tickets.append(ticket)
                     elif "spread too wide" in result or "Market closed" in result:
