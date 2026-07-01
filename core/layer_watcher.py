@@ -658,6 +658,11 @@ async def watch_layered_entry(signal, signal_id: str, bot,
 
                     if "Trade Executed" in result:
                         ticket = _get_latest_ticket(signal_id, exclude=all_own)
+                        if not ticket:
+                            import re
+                            m = re.search(r"Ticket:\s*#?(\d+)", result)
+                            if m:
+                                ticket = int(m.group(1))
                         if ticket:
                             layer_tickets.append(ticket)
                     elif "spread too wide" in result or "Market closed" in result:

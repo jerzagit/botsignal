@@ -28,7 +28,7 @@ from core.config import (  # noqa: E402
 )
 from core.listener import start_listener  # noqa: E402
 from core.map_watcher import start_map_watcher  # noqa: E402
-from core.mt5 import mt5_connect_test  # noqa: E402
+from core.mt5 import mt5_connect_test, mt5_disconnect  # noqa: E402
 from core.notifier import get_bot, start_notifier  # noqa: E402
 
 Path("logs").mkdir(exist_ok=True)
@@ -263,6 +263,7 @@ async def main_async() -> int:
     finally:
         await _cancel_tasks(tasks)
         await _stop_notifier(app)
+        mt5_disconnect()
         release_lock()
 
 

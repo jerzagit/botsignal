@@ -11,6 +11,10 @@ from pathlib import Path
 
 import MetaTrader5 as mt5
 
+# Prevent terminal reload flicker — keep connection alive
+_mt5_shutdown_orig = mt5.shutdown
+mt5.shutdown = lambda: None
+
 from core.config import MT5_PATH, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_SYMBOL_SUFFIX, \
                        SL_PIP_SIZE, ENTRY_MAX_DISTANCE_PIPS, MIN_MARGIN_LEVEL, \
                        MAX_SPREAD_PIPS, MIN_RR_RATIO, BLOCK_SAME_DIRECTION_STACK, STACK_MODE, \
@@ -23,6 +27,8 @@ from core.risk   import calculate_lot
 log = logging.getLogger(__name__)
 TRADE_LOG = Path("data/trades.json")
 
+# Persistent MT5 connection — prevent terminal reload flicker
+_mt5_connected = False
 
 def _fire_guard(guard_name: str, signal: Signal, signal_id: str,
                 reason: str, actual: str = "", required: str = ""):
@@ -39,16 +45,28 @@ def _fire_guard(guard_name: str, signal: Signal, signal_id: str,
 # ── Connection ────────────────────────────────────────────────────────────────
 
 def mt5_connect() -> bool:
-    """Connect and login to MT5. Returns True on success."""
+    """Connect and login to MT5 — idempotent, keeps connection alive."""
+    global _mt5_connected
+    if _mt5_connected:
+        return True
     kwargs = {"path": MT5_PATH} if MT5_PATH else {}
     if not mt5.initialize(**kwargs):
         log.error(f"MT5 initialize() failed: {mt5.last_error()}")
         return False
     if not mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
         log.error(f"MT5 login failed: {mt5.last_error()}")
-        mt5.shutdown()
+        _mt5_shutdown_orig()
         return False
+    _mt5_connected = True
     return True
+
+
+def mt5_disconnect():
+    """Full shutdown — call only on bot exit."""
+    global _mt5_connected
+    if _mt5_connected:
+        _mt5_shutdown_orig()
+        _mt5_connected = False
 
 
 def mt5_connect_test() -> tuple[bool, str]:
@@ -61,7 +79,6 @@ def mt5_connect_test() -> tuple[bool, str]:
         f"Balance: ${info.balance:,.2f} | "
         f"Free margin: ${info.margin_free:,.2f}"
     )
-    mt5.shutdown()
     return True, msg
 
 
