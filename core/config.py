@@ -11,6 +11,7 @@ load_dotenv()
 # ── Telegram user account (from my.telegram.org) ──────────────────────────────
 TG_API_ID       = int(os.getenv("TG_API_ID", "0"))
 TG_API_HASH     = os.getenv("TG_API_HASH", "")
+TG_PHONE        = os.getenv("TG_PHONE", "")
 
 # ── Your personal bot (from @BotFather) ───────────────────────────────────────
 BOT_TOKEN       = os.getenv("BOT_TOKEN", "")
