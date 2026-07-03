@@ -47,31 +47,56 @@ def _fire_guard(guard_name: str, signal: Signal, signal_id: str,
 
 # ── Connection ────────────────────────────────────────────────────────────────
 
-def _ensure_autotrade_enabled():
-    """Ensure MT5 'Allow Automated Trading' is enabled.
-    1. Patch common.ini so setting sticks across restarts.
-    2. Send Alt+T keystroke to MT5 window to re-enable it right now
-       (handles the 'account changed' mid-session disable).
+def _lock_mt5_config():
+    """Lock MT5 terminal config to the correct account and symbol.
+    Writes common.ini so the terminal always opens with:
+      - Account 26578318 on VTMarkets-Live 3
+      - Automated Trading enabled
+      - XAUUSD as the default chart symbol
     """
     try:
         app_data = os.environ.get("APPDATA", "")
         terminal_root = Path(app_data) / "MetaQuotes" / "Terminal"
         instance_dirs = [d for d in terminal_root.iterdir()
                          if d.is_dir() and d.name not in ("Common", "Community")]
-        if instance_dirs:
-            ini_path = instance_dirs[0] / "config" / "common.ini"
-            if ini_path.exists():
-                content = ini_path.read_text(encoding="utf-8")
-                new_content = re.sub(
-                    r'(?m)^(Enabled\s*)=\s*0$',
-                    r'\1=1',
-                    content
-                )
-                if new_content != content:
-                    ini_path.write_text(new_content, encoding="utf-8")
-                    log.info("AutoTrading enabled in %s", ini_path)
+        if not instance_dirs:
+            return
+        ini_path = instance_dirs[0] / "config" / "common.ini"
+        if not ini_path.exists():
+            return
+
+        content = ini_path.read_text(encoding="utf-8")
+
+        # Force correct account login
+        content = re.sub(r'(?m)^(Login\s*)=.*$', r'\1=' + str(MT5_LOGIN), content)
+        # Force correct server name (with space as MT5 saved it)
+        content = re.sub(r'(?m)^(Server\s*)=.*$', r'\1=' + MT5_SERVER, content)
+        # Enable automated trading
+        content = re.sub(r'(?m)^(Enabled\s*)=\s*0$', r'\1=1', content)
+
+        ini_path.write_text(content, encoding="utf-8")
+        log.info("MT5 config locked to account %s on %s", MT5_LOGIN, MT5_SERVER)
     except Exception as exc:
-        log.warning("Could not enable AutoTrading in common.ini: %s", exc)
+        log.warning("Could not lock MT5 config: %s", exc)
+
+
+def _ensure_default_symbol():
+    """Ensure XAUUSD-STDc is visible in Market Watch as the default symbol."""
+    try:
+        sym = "XAUUSD" + MT5_SYMBOL_SUFFIX
+        mt5.symbol_select(sym, True)
+        log.info("Default symbol %s added to Market Watch", sym)
+    except Exception as exc:
+        log.warning("Could not select default symbol: %s", exc)
+
+
+def _ensure_autotrade_enabled():
+    """Ensure MT5 'Allow Automated Trading' is enabled.
+    1. Patch common.ini so setting sticks across restarts.
+    2. Send Alt+T keystroke to MT5 window to re-enable it right now
+       (handles the 'account changed' mid-session disable).
+    """
+    _lock_mt5_config()
 
     # Verify terminal state — if AutoTrading is still off, send Alt+T to toggle it
     try:
@@ -109,12 +134,18 @@ def mt5_connect() -> bool:
 
     if not _mt5_initialized:
         kwargs = {"path": MT5_PATH} if MT5_PATH else {}
+        kwargs["login"] = MT5_LOGIN
+        kwargs["password"] = MT5_PASSWORD
+        kwargs["server"] = MT5_SERVER
         if not mt5.initialize(**kwargs):
             log.error(f"MT5 initialize() failed: {mt5.last_error()}")
             return False
         _mt5_initialized = True
 
-    mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER)
+    if not mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
+        log.error(f"MT5 login() failed: {mt5.last_error()}")
+        _mt5_shutdown_orig()
+        return False
     ac = mt5.account_info()
     if ac is None or ac.login != MT5_LOGIN:
         log.error(f"MT5 login/verify failed: {mt5.last_error()}")
@@ -122,6 +153,7 @@ def mt5_connect() -> bool:
         return False
     _mt5_connected = True
     _ensure_autotrade_enabled()
+    _ensure_default_symbol()
     return True
 
 

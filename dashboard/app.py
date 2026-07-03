@@ -271,11 +271,11 @@ def api_guards_live():
         from core.config import MT5_PATH, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER
 
         kwargs = {"path": MT5_PATH} if MT5_PATH else {}
+        kwargs["login"] = MT5_LOGIN
+        kwargs["password"] = MT5_PASSWORD
+        kwargs["server"] = MT5_SERVER
         if not mt5.initialize(**kwargs):
             return jsonify({"error": "MT5 not running"}), 503
-        if not mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
-            mt5.shutdown()
-            return jsonify({"error": "MT5 login failed"}), 503
 
         acc  = mt5.account_info()
         symbol = "XAUUSD" + MT5_SYMBOL_SUFFIX
