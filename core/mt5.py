@@ -37,7 +37,8 @@ def _fire_guard(guard_name: str, signal: Signal, signal_id: str,
         from core.db import record_guard_event
         record_guard_event(guard_name, signal_id or "",
                            signal.symbol, signal.direction,
-                           reason, actual, required)
+                           reason, actual, required,
+                           getattr(signal, "source_id", "") or "")
     except Exception as e:
         log.warning(f"_fire_guard log failed: {e}")
 
@@ -140,6 +141,11 @@ def execute_trade(signal: Signal, signal_id: str = None,
         return "❌ Could not connect to MT5."
 
     symbol = signal.symbol + MT5_SYMBOL_SUFFIX
+    effective_risk_percent = (
+        risk_percent
+        if risk_percent is not None
+        else (getattr(signal, "source_risk_percent", 0.0) or None)
+    )
 
     # ── GUARD 1: Account info ─────────────────────────────────────────────────
     account = mt5.account_info()
@@ -306,7 +312,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
         lot_explanation = f"📦 Lot: `{lot}` (layer)"
     else:
         if stack_reduced:
-            lot, lot_explanation = calculate_lot(signal, risk_override=risk_percent)
+            lot, lot_explanation = calculate_lot(signal, risk_override=effective_risk_percent)
             if lot <= existing_lot:
                 mt5.shutdown()
                 return (
@@ -324,12 +330,28 @@ def execute_trade(signal: Signal, signal_id: str = None,
                 f"new_lot={lot}"
             )
         else:
-            lot, lot_explanation = calculate_lot(signal, risk_override=risk_percent)
+            lot, lot_explanation = calculate_lot(signal, risk_override=effective_risk_percent)
     if lot == 0.0:
         _fire_guard("lot_calc", signal, signal_id,
                     lot_explanation, "0.00 lot", f"≥{MIN_LOT}")
         mt5.shutdown()
         return f"❌ Lot calculation failed:\n{lot_explanation}"
+
+    source_risk_note = ""
+    if getattr(signal, "source_id", ""):
+        from core.source_risk import apply_source_risk_bucket
+        source_result = apply_source_risk_bucket(signal, account, lot)
+        if not source_result.allowed:
+            _fire_guard("source_risk", signal, signal_id,
+                        source_result.reason, f"{lot} lot", "within source bucket")
+            mt5.shutdown()
+            return (
+                f"?? *Trade blocked - source risk bucket full*\n"
+                f"{source_result.reason}"
+            )
+        if source_result.lot != lot:
+            lot = source_result.lot
+            source_risk_note = "\n" + source_result.note
 
     direction_emoji = "🔴" if signal.direction == "sell" else "🟢"
 
@@ -387,6 +409,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
             f"{direction_emoji} `{symbol} {signal.direction.upper()}`\n"
             f"Entry: `{price}` | SL: `{actual_sl}` | TP: `{actual_tp_override}`\n"
             f"Lot: `{lot}` | Ticket: `#{r.order}`"
+            f"{source_risk_note}"
             f"{tp_override_note}"
         )
 
@@ -459,6 +482,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
         f"{lot_explanation}\n"
         f"📦 Split: `{actual_splits} × {split_lot} lot`"
         + (f" _(reduced from {TRADE_SPLIT} — margin too small to split further)_" if actual_splits < TRADE_SPLIT else "")
+        + source_risk_note
         + "\n\n"
         f"🎫 Tickets:\n{tick_lines}{failed_str}{tp_override_note}"
     )

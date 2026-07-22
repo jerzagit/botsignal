@@ -34,6 +34,7 @@ from core.config import (
     TREND_EMA_SHORT, TREND_EMA_LONG, TREND_RSI_PERIOD,
     MANUAL_SL_PIPS, MANUAL_TP1_PIPS, MANUAL_TP2_PIPS,
     MANUAL_SYMBOL, MANUAL_RISK_PERCENT,
+    SIGNAL_SOURCES, SOURCE_RISK_MODE, SOURCE_CONFLICT_MODE, MAX_TOTAL_OPEN_RISK,
 )
 from dashboard.poller import start_poller
 
@@ -140,6 +141,10 @@ def api_signals():
                 s.sl,
                 s.tps,
                 s.status,
+                s.source_id,
+                s.source_name,
+                s.parser_profile,
+                s.source_risk_percent,
                 t.ticket,
                 t.lot,
                 t.entry_price,
@@ -170,6 +175,10 @@ def api_signals():
             "sl":          round(float(r["sl"]), 2),
             "tps":         [round(t, 2) for t in json.loads(r["tps"])] if r["tps"] else [],
             "status":      r["status"],
+            "source_id":   r["source_id"],
+            "source_name": r["source_name"],
+            "parser_profile": r["parser_profile"],
+            "source_risk_percent": float(r["source_risk_percent"]) if r["source_risk_percent"] is not None else None,
             "ticket":      r["ticket"],
             "lot":         round(float(r["lot"]), 2) if r["lot"] is not None else None,
             "entry_price": round(float(r["entry_price"]), 2) if r["entry_price"] is not None else None,
@@ -206,6 +215,23 @@ def api_guards_config():
         "proximity": {"threshold": f"≤ {ENTRY_MAX_DISTANCE_PIPS} pips", "enabled": True},
         "lot_calc":  {"threshold": f"{MIN_LOT}–{MAX_LOT} lot",       "enabled": True},
         "risk":      {"threshold": "10% free margin @ 1000p benchmark"},
+        "source_risk": {
+            "enabled": True,
+            "mode": SOURCE_RISK_MODE,
+            "conflict_mode": SOURCE_CONFLICT_MODE,
+            "max_total_open_risk": MAX_TOTAL_OPEN_RISK,
+            "sources": [
+                {
+                    "source_id": s.source_id,
+                    "name": s.name,
+                    "risk_percent": s.risk_percent,
+                    "parser_profile": s.parser_profile,
+                    "auto_execute": s.auto_execute,
+                }
+                for s in SIGNAL_SOURCES
+            ],
+            "threshold": f"{len(SIGNAL_SOURCES)} source(s) | global cap {MAX_TOTAL_OPEN_RISK*100:.1f}%",
+        },
         "auto_tp":   {"threshold": f"SL < {SL_MIN_PIPS}p => TP set to {TP_ENFORCE_PIPS}p"},
         "profit_lock": {
             "threshold": f"+{PROFIT_LOCK_PIPS}p → BE + TP {PROFIT_LOCK_TP_PIPS}p",
@@ -371,7 +397,7 @@ def api_guards_log():
     with conn.cursor() as cur:
         cur.execute("""
             SELECT id, fired_at, guard_name, signal_id,
-                   symbol, direction, reason, value_actual, value_required
+                   symbol, direction, source_id, reason, value_actual, value_required
             FROM guard_events
             ORDER BY fired_at DESC
             LIMIT 100
@@ -388,6 +414,7 @@ def api_guards_log():
             "signal_id":      r["signal_id"],
             "symbol":         r["symbol"],
             "direction":      r["direction"],
+            "source_id":      r["source_id"],
             "reason":         r["reason"],
             "value_actual":   r["value_actual"],
             "value_required": r["value_required"],

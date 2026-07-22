@@ -377,7 +377,8 @@ async def watch_layered_entry(signal, signal_id: str, bot,
         await _notify(bot, f"❌ LayerWatcher [{signal_id}]: MT5 connect failed at startup")
         return
 
-    total_lot, lot_explanation = calculate_lot(signal)
+    source_risk_percent = getattr(signal, "source_risk_percent", 0.0) or None
+    total_lot, lot_explanation = calculate_lot(signal, risk_override=source_risk_percent)
     effective_tps = _adjusted_tps(signal)
     mt5.shutdown()
 

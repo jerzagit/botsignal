@@ -35,6 +35,7 @@ from core.config import (
     TRAIL_ENABLED, TRAIL_PIPS,
     SESSION_FILTER_ENABLED, SESSION_START_HOUR_UTC, SESSION_END_HOUR_UTC,
     LAYER_MODE, LAYER_COUNT,
+    SIGNAL_SOURCES, SOURCE_RISK_MODE, SOURCE_CONFLICT_MODE, MAX_TOTAL_OPEN_RISK,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -166,6 +167,7 @@ def api_signals():
             cur.execute(f"""
                 SELECT s.signal_id, s.received_at, s.symbol, s.direction,
                        s.entry_low, s.entry_high, s.sl, s.tps, s.status,
+                       s.source_id, s.source_name, s.parser_profile, s.source_risk_percent,
                        t.outcome, t.entry_mode, t.layer_num
                 FROM signals s
                 LEFT JOIN trades t ON s.signal_id = t.signal_id
@@ -194,6 +196,10 @@ def api_signals():
             "sl":          round(float(r["sl"]), 2),
             "tps":         [round(t, 2) for t in json.loads(r["tps"])] if r["tps"] else [],
             "status":      r["status"],
+            "source_id":   r["source_id"],
+            "source_name": r["source_name"],
+            "parser_profile": r["parser_profile"],
+            "source_risk_percent": float(r["source_risk_percent"]) if r["source_risk_percent"] is not None else None,
             "outcome":     r["outcome"],
             "entry_mode":  r["entry_mode"],
             "layer_num":   r["layer_num"],
@@ -224,6 +230,23 @@ def api_guards_config():
         "spread":    {"threshold": f"≤ {MAX_SPREAD_PIPS:.0f} pips",  "enabled": True},
         "proximity": {"threshold": f"≤ {ENTRY_MAX_DISTANCE_PIPS} pips", "enabled": True},
         "lot_calc":  {"threshold": f"{MIN_LOT}–{MAX_LOT} lot",       "enabled": True},
+        "source_risk": {
+            "enabled": True,
+            "mode": SOURCE_RISK_MODE,
+            "conflict_mode": SOURCE_CONFLICT_MODE,
+            "max_total_open_risk": MAX_TOTAL_OPEN_RISK,
+            "sources": [
+                {
+                    "source_id": s.source_id,
+                    "name": s.name,
+                    "risk_percent": s.risk_percent,
+                    "parser_profile": s.parser_profile,
+                    "auto_execute": s.auto_execute,
+                }
+                for s in SIGNAL_SOURCES
+            ],
+            "threshold": f"{len(SIGNAL_SOURCES)} source(s) | global cap {MAX_TOTAL_OPEN_RISK*100:.1f}%",
+        },
         "profit_lock": {
             "threshold": f"+{PROFIT_LOCK_PIPS}p → BE + TP {PROFIT_LOCK_TP_PIPS}p",
             "enabled":   PROFIT_LOCK_ENABLED,
@@ -251,7 +274,7 @@ def api_guards_log():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, fired_at, guard_name, signal_id,
-                       symbol, direction, reason, value_actual, value_required
+                       symbol, direction, source_id, reason, value_actual, value_required
                 FROM guard_events ORDER BY fired_at DESC LIMIT 100
             """)
             rows = cur.fetchall()
@@ -269,6 +292,7 @@ def api_guards_log():
             "signal_id":      r["signal_id"],
             "symbol":         r["symbol"],
             "direction":      r["direction"],
+            "source_id":      r["source_id"],
             "reason":         r["reason"],
             "value_actual":   r["value_actual"],
             "value_required": r["value_required"],

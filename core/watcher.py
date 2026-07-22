@@ -92,7 +92,20 @@ async def watch_and_execute(signal, signal_id: str, bot, skip_proximity: bool = 
                 pending.pop(signal_id, None)
 
                 result = await asyncio.get_event_loop().run_in_executor(
-                    None, execute_trade, signal, signal_id, None, None, None, skip_proximity, "manual", None, True, True, True, True
+                    None,
+                    execute_trade,
+                    signal,
+                    signal_id,
+                    None,
+                    None,
+                    None,
+                    skip_proximity,
+                    "manual" if skip_proximity else "direct",
+                    None,
+                    skip_proximity,  # manual immediate entries skip RR
+                    skip_proximity,  # manual immediate entries skip session
+                    False,           # keep stack guard active
+                    False,           # keep spread guard active
                 )
 
                 if "Trade Executed" in result:

@@ -43,9 +43,11 @@ def upsert_signal(signal_id: str, signal, status: str = "pending"):
     """
     sql = """
         INSERT INTO signals
-            (signal_id, symbol, direction, entry_low, entry_high, sl, tps, raw_text, status)
+            (signal_id, symbol, direction, entry_low, entry_high, sl, tps, raw_text,
+             source_id, source_name, parser_profile, telegram_chat_id, source_risk_percent,
+             status)
         VALUES
-            (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             status     = VALUES(status),
             updated_at = CURRENT_TIMESTAMP
@@ -62,6 +64,11 @@ def upsert_signal(signal_id: str, signal, status: str = "pending"):
                 signal.sl,
                 json.dumps(signal.tps),
                 signal.raw_text,
+                getattr(signal, "source_id", "") or None,
+                getattr(signal, "source_name", "") or None,
+                getattr(signal, "parser_profile", "") or None,
+                getattr(signal, "telegram_chat_id", "") or None,
+                getattr(signal, "source_risk_percent", 0.0) or None,
                 status,
             ))
         conn.close()
@@ -122,18 +129,19 @@ def ensure_manual_trade(ticket: int, symbol: str, direction: str,
 
 def record_guard_event(guard_name: str, signal_id: str, symbol: str,
                        direction: str, reason: str,
-                       value_actual: str = "", value_required: str = ""):
+                       value_actual: str = "", value_required: str = "",
+                       source_id: str = ""):
     """Log a guard block event so the dashboard can show why a trade was rejected."""
     sql = """
         INSERT INTO guard_events
-            (guard_name, signal_id, symbol, direction, reason, value_actual, value_required)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+            (guard_name, signal_id, symbol, direction, source_id, reason, value_actual, value_required)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
     try:
         conn = get_conn()
         with conn.cursor() as cur:
             cur.execute(sql, (guard_name, signal_id, symbol, direction,
-                              reason, value_actual, value_required))
+                              source_id or None, reason, value_actual, value_required))
         conn.close()
     except Exception as e:
         log.error(f"db.record_guard_event failed: {e}")

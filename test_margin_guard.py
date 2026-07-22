@@ -59,6 +59,9 @@ def _mock_mt5_ok(account_mock, existing_positions=None, tick_override=None):
         "core.mt5.mt5.ORDER_TIME_GTC":     1,
         "core.mt5.mt5.ORDER_FILLING_IOC":  1,
         "core.mt5.mt5.TRADE_RETCODE_DONE": 10009,
+        "core.mt5._log_trade":             MagicMock(),
+        "core.db.record_trade":            MagicMock(),
+        "core.db.record_guard_event":      MagicMock(),
         # risk.py also calls account_info + symbol_info
         "core.risk.mt5.account_info":      MagicMock(return_value=account_mock),
         "core.risk.mt5.symbol_info":       MagicMock(return_value=_symbol_info()),

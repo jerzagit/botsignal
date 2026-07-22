@@ -18,6 +18,11 @@ CREATE TABLE IF NOT EXISTS signals (
     sl          DECIMAL(12,5)  NOT NULL,
     tps         JSON,
     raw_text    TEXT,
+    source_id   VARCHAR(32)    DEFAULT NULL,
+    source_name VARCHAR(64)    DEFAULT NULL,
+    parser_profile VARCHAR(32) DEFAULT NULL,
+    telegram_chat_id VARCHAR(64) DEFAULT NULL,
+    source_risk_percent DECIMAL(6,4) DEFAULT NULL,
     status      VARCHAR(16)    DEFAULT 'pending'
 );
 
@@ -85,6 +90,7 @@ CREATE TABLE IF NOT EXISTS guard_events (
     signal_id      VARCHAR(64),
     symbol         VARCHAR(20),
     direction      VARCHAR(4),
+    source_id      VARCHAR(32),
     reason         TEXT,
     value_actual   VARCHAR(64),
     value_required VARCHAR(64),

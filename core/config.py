@@ -4,6 +4,7 @@ All configuration loaded from .env — single source of truth.
 """
 
 import os
+from dataclasses import dataclass
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -18,6 +19,69 @@ YOUR_CHAT_ID    = int(os.getenv("YOUR_CHAT_ID", "0"))
 
 # ── Mentor's signal group ──────────────────────────────────────────────────────
 SIGNAL_GROUP    = os.getenv("SIGNAL_GROUP", "AssistByHafizCarat")
+
+
+@dataclass(frozen=True)
+class SignalSource:
+    """Telegram signal source configuration."""
+    source_id: str
+    chat: str
+    risk_percent: float
+    parser_profile: str = "hafiz"
+    name: str = ""
+    auto_execute: bool = True
+
+
+SOURCE_RISK_DEFAULT = float(os.getenv("SOURCE_RISK_DEFAULT", "0.10"))
+SOURCE_RISK_MODE = os.getenv("SOURCE_RISK_MODE", "reduce").lower()  # reduce | block
+SOURCE_CONFLICT_MODE = os.getenv("SOURCE_CONFLICT_MODE", "allow").lower()
+MAX_TOTAL_OPEN_RISK = float(os.getenv("MAX_TOTAL_OPEN_RISK", "0.20"))
+
+
+def _parse_bool(value: str, default: bool = True) -> bool:
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_signal_sources(raw: str) -> list[SignalSource]:
+    """
+    Parse SIGNAL_SOURCES.
+
+    Format:
+        source_id:chat:risk_percent:parser_profile:name:auto_execute
+
+    Example:
+        hafiz:-1002083967629:0.10:hafiz:PIPS FIGHTER:true
+
+    Only source_id and chat are required. Missing risk uses SOURCE_RISK_DEFAULT.
+    """
+    sources: list[SignalSource] = []
+    for item in (raw or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parts = [p.strip() for p in item.split(":")]
+        if len(parts) < 2:
+            continue
+        source_id = parts[0].lower().replace(" ", "_")
+        chat = parts[1]
+        try:
+            risk_percent = float(parts[2]) if len(parts) > 2 and parts[2] else SOURCE_RISK_DEFAULT
+        except ValueError:
+            risk_percent = SOURCE_RISK_DEFAULT
+        parser_profile = (parts[3] if len(parts) > 3 and parts[3] else "hafiz").lower()
+        name = parts[4] if len(parts) > 4 and parts[4] else source_id
+        auto_execute = _parse_bool(parts[5], True) if len(parts) > 5 else True
+        sources.append(SignalSource(source_id, chat, risk_percent, parser_profile, name, auto_execute))
+    return sources
+
+
+SIGNAL_SOURCES = _parse_signal_sources(os.getenv("SIGNAL_SOURCES", ""))
+if not SIGNAL_SOURCES:
+    SIGNAL_SOURCES = [
+        SignalSource("default", SIGNAL_GROUP, SOURCE_RISK_DEFAULT, "hafiz", "Default", True)
+    ]
 
 # ── Environment mode ──────────────────────────────────────────────────────────
 ENV_MODE = os.getenv("ENV_MODE", "demo").lower()
