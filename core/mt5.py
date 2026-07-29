@@ -5,6 +5,8 @@ MT5 connection management and trade execution.
 
 import logging
 import json
+import os
+import re
 import time
 import datetime
 from pathlib import Path
@@ -30,6 +32,7 @@ TRADE_LOG = Path("data/trades.json")
 
 # Persistent MT5 connection — prevent terminal reload flicker
 _mt5_connected = False
+_mt5_initialized = False
 
 def _fire_guard(guard_name: str, signal: Signal, signal_id: str,
                 reason: str, actual: str = "", required: str = ""):
@@ -46,20 +49,113 @@ def _fire_guard(guard_name: str, signal: Signal, signal_id: str,
 
 # ── Connection ────────────────────────────────────────────────────────────────
 
+def _lock_mt5_config():
+    """Lock MT5 terminal config to the correct account and symbol.
+    Writes common.ini so the terminal always opens with:
+      - Account 26578318 on VTMarkets-Live 3
+      - Automated Trading enabled
+      - XAUUSD as the default chart symbol
+    """
+    try:
+        app_data = os.environ.get("APPDATA", "")
+        terminal_root = Path(app_data) / "MetaQuotes" / "Terminal"
+        instance_dirs = [d for d in terminal_root.iterdir()
+                         if d.is_dir() and d.name not in ("Common", "Community")]
+        if not instance_dirs:
+            return
+        ini_path = instance_dirs[0] / "config" / "common.ini"
+        if not ini_path.exists():
+            return
+
+        content = ini_path.read_text(encoding="utf-8")
+
+        # Force correct account login
+        content = re.sub(r'(?m)^(Login\s*)=.*$', r'\1=' + str(MT5_LOGIN), content)
+        # Force correct server name (with space as MT5 saved it)
+        content = re.sub(r'(?m)^(Server\s*)=.*$', r'\1=' + MT5_SERVER, content)
+        # Enable automated trading
+        content = re.sub(r'(?m)^(Enabled\s*)=\s*0$', r'\1=1', content)
+
+        ini_path.write_text(content, encoding="utf-8")
+        log.info("MT5 config locked to account %s on %s", MT5_LOGIN, MT5_SERVER)
+    except Exception as exc:
+        log.warning("Could not lock MT5 config: %s", exc)
+
+
+def _ensure_default_symbol():
+    """Ensure XAUUSD-STDc is visible in Market Watch as the default symbol."""
+    try:
+        sym = "XAUUSD" + MT5_SYMBOL_SUFFIX
+        mt5.symbol_select(sym, True)
+        log.info("Default symbol %s added to Market Watch", sym)
+    except Exception as exc:
+        log.warning("Could not select default symbol: %s", exc)
+
+
+def _ensure_autotrade_enabled():
+    """Ensure MT5 'Allow Automated Trading' is enabled.
+    1. Patch common.ini so setting sticks across restarts.
+    2. Send Alt+T keystroke to MT5 window to re-enable it right now
+       (handles the 'account changed' mid-session disable).
+    """
+    _lock_mt5_config()
+
+    # Verify terminal state — if AutoTrading is still off, send Alt+T to toggle it
+    try:
+        term = mt5.terminal_info()
+        if term and not term.trade_allowed:
+            import ctypes
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, "MetaTrader 5")
+            if hwnd:
+                user32.ShowWindow(hwnd, 1)
+                user32.SetForegroundWindow(hwnd)
+                user32.AllowSetForegroundWindow(-1)
+                ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(0x54, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(0x54, 0, 2, 0)
+                ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
+                log.info("Sent Alt+T to MT5 window — AutoTrading was off")
+    except Exception as exc:
+        log.warning("Could not send Alt+T keystroke: %s", exc)
+
+
 def mt5_connect() -> bool:
-    """Connect and login to MT5 — idempotent, keeps connection alive."""
-    global _mt5_connected
+    """Connect and login to MT5 — idempotent, keeps connection alive.
+    Verifies the connection is still alive even when already connected,
+    and reconnects automatically if the terminal has restarted.
+    initialize() is called only ONCE to prevent terminal reload flicker.
+    """
+    global _mt5_connected, _mt5_initialized
     if _mt5_connected:
-        return True
-    kwargs = {"path": MT5_PATH} if MT5_PATH else {}
-    if not mt5.initialize(**kwargs):
-        log.error(f"MT5 initialize() failed: {mt5.last_error()}")
-        return False
+        ac = mt5.account_info()
+        if ac is not None and ac.login == MT5_LOGIN:
+            return True
+        log.warning("MT5 connection stale — reconnecting via login...")
+        _mt5_connected = False
+
+    if not _mt5_initialized:
+        kwargs = {"path": MT5_PATH} if MT5_PATH else {}
+        kwargs["login"] = MT5_LOGIN
+        kwargs["password"] = MT5_PASSWORD
+        kwargs["server"] = MT5_SERVER
+        if not mt5.initialize(**kwargs):
+            log.error(f"MT5 initialize() failed: {mt5.last_error()}")
+            return False
+        _mt5_initialized = True
+
     if not mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
-        log.error(f"MT5 login failed: {mt5.last_error()}")
+        log.error(f"MT5 login() failed: {mt5.last_error()}")
+        _mt5_shutdown_orig()
+        return False
+    ac = mt5.account_info()
+    if ac is None or ac.login != MT5_LOGIN:
+        log.error(f"MT5 login/verify failed: {mt5.last_error()}")
         _mt5_shutdown_orig()
         return False
     _mt5_connected = True
+    _ensure_autotrade_enabled()
+    _ensure_default_symbol()
     return True
 
 
@@ -81,6 +177,9 @@ def mt5_connect_test() -> tuple[bool, str]:
         f"Balance: ${info.balance:,.2f} | "
         f"Free margin: ${info.margin_free:,.2f}"
     )
+    from core.config import MANUAL_SYMBOL
+    sym = MANUAL_SYMBOL + MT5_SYMBOL_SUFFIX
+    mt5.symbol_select(sym, True)
     return True, msg
 
 

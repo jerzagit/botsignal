@@ -7,15 +7,14 @@ Usage: python test_signal_inject.py
 from core.signal import parse_signal
 from core.mt5    import execute_trade
 
-RAW = """xauusd sell @4659-4663
+RAW = """xauusd sell @4075-4085
 
-sl 4666
+sl 4090
 
-tp 4654
-tp 4552
+tp 4065
+tp 4055
 
-Trade At Your Own Risk
-T.A.Y.O.R @AssistByHafizCarat"""
+Trade At Your Own Risk❗️"""
 
 signal = parse_signal(RAW)
 

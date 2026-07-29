@@ -71,8 +71,9 @@ async def resolve_sources(client: TelegramClient):
 
 async def start_listener():
     """Start Telethon, resolve sources, and listen for signals."""
+    from core.config import TG_PHONE
     client = TelegramClient("data/session", TG_API_ID, TG_API_HASH)
-    await client.start()   # First run: prompts phone + OTP. Session saved after.
+    await client.start(phone=TG_PHONE)   # First run: prompts phone + OTP. Session saved after.
 
     bot = get_bot()
 
