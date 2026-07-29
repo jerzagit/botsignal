@@ -27,6 +27,11 @@ class Signal:
     tps:        list        # [tp1, tp2, ...]
     raw_text:   str
     created_at: float = field(default_factory=time.time)
+    source_id:  str = ""
+    source_name: str = ""
+    parser_profile: str = ""
+    telegram_chat_id: str = ""
+    source_risk_percent: float = 0.0
 
     @property
     def entry_mid(self) -> float:
@@ -51,6 +56,11 @@ class Signal:
             "sl":         self.sl,
             "tps":        self.tps,
             "created_at": self.created_at,
+            "source_id":  self.source_id,
+            "source_name": self.source_name,
+            "parser_profile": self.parser_profile,
+            "telegram_chat_id": self.telegram_chat_id,
+            "source_risk_percent": self.source_risk_percent,
         }
 
     def to_json(self) -> str:

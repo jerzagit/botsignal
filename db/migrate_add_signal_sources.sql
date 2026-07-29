@@ -1,0 +1,11 @@
+USE botsignal;
+
+ALTER TABLE signals
+    ADD COLUMN source_id VARCHAR(32) DEFAULT NULL,
+    ADD COLUMN source_name VARCHAR(64) DEFAULT NULL,
+    ADD COLUMN parser_profile VARCHAR(32) DEFAULT NULL,
+    ADD COLUMN telegram_chat_id VARCHAR(64) DEFAULT NULL,
+    ADD COLUMN source_risk_percent DECIMAL(6,4) DEFAULT NULL;
+
+ALTER TABLE guard_events
+    ADD COLUMN source_id VARCHAR(32) DEFAULT NULL;

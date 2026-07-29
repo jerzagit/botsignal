@@ -7,6 +7,7 @@ import logging
 import json
 import os
 import re
+import subprocess
 import time
 import datetime
 from pathlib import Path
@@ -18,11 +19,14 @@ _mt5_shutdown_orig = mt5.shutdown
 mt5.shutdown = lambda: None
 
 from core.config import MT5_PATH, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_SYMBOL_SUFFIX, \
+                       MT5_ATTACH_EXISTING_FIRST, MT5_ALLOW_TERMINAL_LAUNCH, \
+                       MT5_LOCK_CONFIG, MT5_AUTO_TOGGLE_AUTOTRADE, MT5_ALLOW_ACCOUNT_SWITCH, \
                        SL_PIP_SIZE, ENTRY_MAX_DISTANCE_PIPS, MIN_MARGIN_LEVEL, \
                        MAX_SPREAD_PIPS, MIN_RR_RATIO, BLOCK_SAME_DIRECTION_STACK, STACK_MODE, \
                        TRADE_SPLIT, MIN_LOT, SL_MIN_PIPS, TP_ENFORCE_PIPS, \
                        SESSION_FILTER_ENABLED, SESSION_START_HOUR_UTC, SESSION_END_HOUR_UTC, \
-                       MAX_DAILY_LOSS_USD, MAX_DCA_LAYERS_PER_SYMBOL
+                       MAX_DAILY_LOSS_USD, MAX_DCA_LAYERS_PER_SYMBOL, TRADE_REQUIRES_DB, \
+                       MANUAL_TRADE_REQUIRES_DB
 from core.signal import Signal
 from core.risk   import calculate_lot
 
@@ -32,6 +36,7 @@ TRADE_LOG = Path("data/trades.json")
 # Persistent MT5 connection — prevent terminal reload flicker
 _mt5_connected = False
 _mt5_initialized = False
+_mt5_last_connect_error = ""
 
 def _fire_guard(guard_name: str, signal: Signal, signal_id: str,
                 reason: str, actual: str = "", required: str = ""):
@@ -40,7 +45,8 @@ def _fire_guard(guard_name: str, signal: Signal, signal_id: str,
         from core.db import record_guard_event
         record_guard_event(guard_name, signal_id or "",
                            signal.symbol, signal.direction,
-                           reason, actual, required)
+                           reason, actual, required,
+                           getattr(signal, "source_id", "") or "")
     except Exception as e:
         log.warning(f"_fire_guard log failed: {e}")
 
@@ -118,41 +124,134 @@ def _ensure_autotrade_enabled():
         log.warning("Could not send Alt+T keystroke: %s", exc)
 
 
+def _safe_autotrade_check() -> bool:
+    """Fail closed when MT5 AutoTrading is off; optionally toggle only if configured."""
+    global _mt5_last_connect_error
+    if MT5_LOCK_CONFIG:
+        _lock_mt5_config()
+
+    try:
+        term = mt5.terminal_info()
+        if not term:
+            _mt5_last_connect_error = f"MT5 terminal_info() unavailable: {mt5.last_error()}"
+            log.error(_mt5_last_connect_error)
+            return False
+        if term.trade_allowed:
+            return True
+
+        _mt5_last_connect_error = "MT5 AutoTrading is disabled. Enable AutoTrading in MT5 before starting the bot."
+        log.error(_mt5_last_connect_error)
+        if not MT5_AUTO_TOGGLE_AUTOTRADE:
+            return False
+
+        import ctypes
+        user32 = ctypes.windll.user32
+        hwnd = user32.FindWindowW(None, "MetaTrader 5")
+        if not hwnd:
+            return False
+        user32.ShowWindow(hwnd, 1)
+        user32.SetForegroundWindow(hwnd)
+        user32.AllowSetForegroundWindow(-1)
+        ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(0x54, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(0x54, 0, 2, 0)
+        ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
+        log.info("Sent Alt+T to MT5 window because AutoTrading was off.")
+        time.sleep(1)
+        term = mt5.terminal_info()
+        return bool(term and term.trade_allowed)
+    except Exception as exc:
+        _mt5_last_connect_error = f"Could not verify or toggle MT5 AutoTrading: {exc}"
+        log.warning(_mt5_last_connect_error)
+        return False
+
+
+def _initialize_mt5_safe() -> bool:
+    """Attach to an already-open terminal first; launch only when explicitly allowed."""
+    global _mt5_last_connect_error
+    if MT5_ATTACH_EXISTING_FIRST:
+        if os.name == "nt":
+            result = subprocess.run(
+                ["tasklist", "/FI", "IMAGENAME eq terminal64.exe", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if "terminal64.exe" not in result.stdout.lower():
+                _mt5_last_connect_error = (
+                    "MT5 is not already running. Open MT5 manually before starting bot or dashboard poller."
+                )
+                log.error(_mt5_last_connect_error)
+                return False
+        if mt5.initialize():
+            log.info("Attached to existing MT5 terminal.")
+            return True
+        _mt5_last_connect_error = f"MT5 attach to existing terminal failed: {mt5.last_error()}"
+        log.warning(_mt5_last_connect_error)
+
+    if not MT5_ALLOW_TERMINAL_LAUNCH:
+        _mt5_last_connect_error = (
+            "MT5 terminal launch is disabled. Open MT5 manually, login, enable AutoTrading, then start bot.py."
+        )
+        log.error(_mt5_last_connect_error)
+        return False
+
+    kwargs = {"path": MT5_PATH} if MT5_PATH else {}
+    if not mt5.initialize(**kwargs):
+        _mt5_last_connect_error = f"MT5 initialize() failed: {mt5.last_error()}"
+        log.error(_mt5_last_connect_error)
+        return False
+    log.info("MT5 terminal initialized via configured path.")
+    return True
+
+
 def mt5_connect() -> bool:
     """Connect and login to MT5 — idempotent, keeps connection alive.
     Verifies the connection is still alive even when already connected,
     and reconnects automatically if the terminal has restarted.
     initialize() is called only ONCE to prevent terminal reload flicker.
     """
-    global _mt5_connected, _mt5_initialized
+    global _mt5_connected, _mt5_initialized, _mt5_last_connect_error
+    _mt5_last_connect_error = ""
     if _mt5_connected:
         ac = mt5.account_info()
         if ac is not None and ac.login == MT5_LOGIN:
-            return True
+            return _safe_autotrade_check()
         log.warning("MT5 connection stale — reconnecting via login...")
         _mt5_connected = False
 
     if not _mt5_initialized:
-        kwargs = {"path": MT5_PATH} if MT5_PATH else {}
-        kwargs["login"] = MT5_LOGIN
-        kwargs["password"] = MT5_PASSWORD
-        kwargs["server"] = MT5_SERVER
-        if not mt5.initialize(**kwargs):
-            log.error(f"MT5 initialize() failed: {mt5.last_error()}")
+        if not _initialize_mt5_safe():
             return False
         _mt5_initialized = True
 
-    if not mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
-        log.error(f"MT5 login() failed: {mt5.last_error()}")
-        _mt5_shutdown_orig()
+    ac = mt5.account_info()
+    if ac is None:
+        _mt5_last_connect_error = f"MT5 account_info() unavailable after initialize: {mt5.last_error()}"
+        log.error(_mt5_last_connect_error)
         return False
+
+    if ac.login != MT5_LOGIN:
+        if not MT5_ALLOW_ACCOUNT_SWITCH:
+            _mt5_last_connect_error = (
+                f"MT5 is logged in as #{ac.login}, but bot expects #{MT5_LOGIN}. "
+                "Switch the account manually in MT5, enable AutoTrading, then start again."
+            )
+            log.error(_mt5_last_connect_error)
+            return False
+        if not mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
+            _mt5_last_connect_error = f"MT5 login() failed: {mt5.last_error()}"
+            log.error(_mt5_last_connect_error)
+            return False
     ac = mt5.account_info()
     if ac is None or ac.login != MT5_LOGIN:
-        log.error(f"MT5 login/verify failed: {mt5.last_error()}")
-        _mt5_shutdown_orig()
+        _mt5_last_connect_error = f"MT5 login/verify failed: {mt5.last_error()}"
+        log.error(_mt5_last_connect_error)
         return False
     _mt5_connected = True
-    _ensure_autotrade_enabled()
+    if not _safe_autotrade_check():
+        _mt5_connected = False
+        return False
     _ensure_default_symbol()
     return True
 
@@ -168,7 +267,7 @@ def mt5_disconnect():
 def mt5_connect_test() -> tuple[bool, str]:
     """Startup sanity check — returns (ok, message)."""
     if not mt5_connect():
-        return False, f"Login failed: {mt5.last_error()}"
+        return False, _mt5_last_connect_error or f"MT5 connection failed: {mt5.last_error()}"
     info = mt5.account_info()
     msg = (
         f"Connected as #{info.login} | "
@@ -235,10 +334,29 @@ def execute_trade(signal: Signal, signal_id: str = None,
                 f"_Wait for reset at midnight or close some positions._"
             )
 
+    db_required = MANUAL_TRADE_REQUIRES_DB if entry_mode == "manual" else TRADE_REQUIRES_DB
+    if db_required and signal_id:
+        from core.db import is_database_available
+        if not is_database_available():
+            _fire_guard("database", signal, signal_id,
+                        "Database unavailable", "offline", "online")
+            return (
+                "🚨 *Trade blocked - database unavailable*\n"
+                "MySQL is required before opening new tracked trades.\n"
+                "_Start MySQL/dashboard services first, or set "
+                "`MANUAL_TRADE_REQUIRES_DB=false` for manual commands only, or "
+                "`TRADE_REQUIRES_DB=false` if you accept all untracked MT5 entries._"
+            )
+
     if not mt5_connect():
         return "❌ Could not connect to MT5."
 
     symbol = signal.symbol + MT5_SYMBOL_SUFFIX
+    effective_risk_percent = (
+        risk_percent
+        if risk_percent is not None
+        else (getattr(signal, "source_risk_percent", 0.0) or None)
+    )
 
     # ── GUARD 1: Account info ─────────────────────────────────────────────────
     account = mt5.account_info()
@@ -405,7 +523,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
         lot_explanation = f"📦 Lot: `{lot}` (layer)"
     else:
         if stack_reduced:
-            lot, lot_explanation = calculate_lot(signal, risk_override=risk_percent)
+            lot, lot_explanation = calculate_lot(signal, risk_override=effective_risk_percent)
             if lot <= existing_lot:
                 mt5.shutdown()
                 return (
@@ -423,12 +541,28 @@ def execute_trade(signal: Signal, signal_id: str = None,
                 f"new_lot={lot}"
             )
         else:
-            lot, lot_explanation = calculate_lot(signal, risk_override=risk_percent)
+            lot, lot_explanation = calculate_lot(signal, risk_override=effective_risk_percent)
     if lot == 0.0:
         _fire_guard("lot_calc", signal, signal_id,
                     lot_explanation, "0.00 lot", f"≥{MIN_LOT}")
         mt5.shutdown()
         return f"❌ Lot calculation failed:\n{lot_explanation}"
+
+    source_risk_note = ""
+    if getattr(signal, "source_id", ""):
+        from core.source_risk import apply_source_risk_bucket
+        source_result = apply_source_risk_bucket(signal, account, lot)
+        if not source_result.allowed:
+            _fire_guard("source_risk", signal, signal_id,
+                        source_result.reason, f"{lot} lot", "within source bucket")
+            mt5.shutdown()
+            return (
+                f"?? *Trade blocked - source risk bucket full*\n"
+                f"{source_result.reason}"
+            )
+        if source_result.lot != lot:
+            lot = source_result.lot
+            source_risk_note = "\n" + source_result.note
 
     direction_emoji = "🔴" if signal.direction == "sell" else "🟢"
 
@@ -486,6 +620,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
             f"{direction_emoji} `{symbol} {signal.direction.upper()}`\n"
             f"Entry: `{price}` | SL: `{actual_sl}` | TP: `{actual_tp_override}`\n"
             f"Lot: `{lot}` | Ticket: `#{r.order}`"
+            f"{source_risk_note}"
             f"{tp_override_note}"
         )
 
@@ -558,6 +693,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
         f"{lot_explanation}\n"
         f"📦 Split: `{actual_splits} × {split_lot} lot`"
         + (f" _(reduced from {TRADE_SPLIT} — margin too small to split further)_" if actual_splits < TRADE_SPLIT else "")
+        + source_risk_note
         + "\n\n"
         f"🎫 Tickets:\n{tick_lines}{failed_str}{tp_override_note}"
     )

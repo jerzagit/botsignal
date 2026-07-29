@@ -178,6 +178,30 @@ Both sets of credentials stay in `.env` — no commenting/uncommenting needed.
 
 ---
 
+## Multiple Telegram signal sources
+
+By default the bot watches the legacy `SIGNAL_GROUP`. To watch multiple groups
+or channels, configure `SIGNAL_SOURCES`:
+
+```env
+# source_id:chat:risk_percent:parser_profile:name:auto_execute
+SIGNAL_SOURCES=hafiz:-1002083967629:0.10:hafiz:PIPS_FIGHTER:true,bobby:@Bobbylivetrade:0.10:bobby:BOBBY_LIVE:false
+SOURCE_RISK_MODE=reduce
+SOURCE_CONFLICT_MODE=allow
+MAX_TOTAL_OPEN_RISK=0.20
+```
+
+Each source gets its own risk bucket. If a source has only partial risk left,
+the bot reduces lot size when possible; if the remaining budget is below
+`MIN_LOT`, the trade is blocked. Different sources do not consume each other's
+buckets, but the global margin guard and `MAX_TOTAL_OPEN_RISK` still protect
+the whole account.
+
+Set `auto_execute=false` for a new source to dry-run its parser before allowing
+real entries.
+
+---
+
 ## .env reference
 
 ```env

@@ -11,7 +11,14 @@ from datetime import datetime, timedelta, timezone
 import pymysql
 import pymysql.cursors
 
-from core.config import DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+from core.config import (
+    DB_HOST,
+    DB_PORT,
+    DB_NAME,
+    DB_USER,
+    DB_PASSWORD,
+    DB_CONNECT_TIMEOUT_SECS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -32,10 +39,26 @@ def get_conn():
         password=DB_PASSWORD,
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=True,
+        connect_timeout=DB_CONNECT_TIMEOUT_SECS,
+        read_timeout=DB_CONNECT_TIMEOUT_SECS,
+        write_timeout=DB_CONNECT_TIMEOUT_SECS,
     )
 
 
-def upsert_signal(signal_id: str, signal, status: str = "pending"):
+def is_database_available() -> bool:
+    """Fast DB health check used by trade guards."""
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+        conn.close()
+        return True
+    except Exception as e:
+        log.error(f"db health check failed: {e}")
+        return False
+
+
+def upsert_signal(signal_id: str, signal, status: str = "pending") -> bool:
     """
     Insert a new signal or update its status.
     Called by listener.py on arrival (pending),
@@ -43,9 +66,11 @@ def upsert_signal(signal_id: str, signal, status: str = "pending"):
     """
     sql = """
         INSERT INTO signals
-            (signal_id, symbol, direction, entry_low, entry_high, sl, tps, raw_text, status)
+            (signal_id, symbol, direction, entry_low, entry_high, sl, tps, raw_text,
+             source_id, source_name, parser_profile, telegram_chat_id, source_risk_percent,
+             status)
         VALUES
-            (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON DUPLICATE KEY UPDATE
             status     = VALUES(status),
             updated_at = CURRENT_TIMESTAMP
@@ -62,15 +87,22 @@ def upsert_signal(signal_id: str, signal, status: str = "pending"):
                 signal.sl,
                 json.dumps(signal.tps),
                 signal.raw_text,
+                getattr(signal, "source_id", "") or None,
+                getattr(signal, "source_name", "") or None,
+                getattr(signal, "parser_profile", "") or None,
+                getattr(signal, "telegram_chat_id", "") or None,
+                getattr(signal, "source_risk_percent", 0.0) or None,
                 status,
             ))
         conn.close()
+        return True
     except Exception as e:
         log.error(f"db.upsert_signal failed: {e}")
+        return False
 
 
 def record_trade(signal_id: str, ticket: int, lot: float, entry_price: float,
-                 entry_mode: str = None, layer_num: int = None):
+                 entry_mode: str = None, layer_num: int = None) -> bool:
     """Insert a trade row right after MT5 confirms execution."""
     sql = """
         INSERT INTO trades (signal_id, ticket, lot, entry_price, entry_mode, layer_num)
@@ -82,8 +114,10 @@ def record_trade(signal_id: str, ticket: int, lot: float, entry_price: float,
         with conn.cursor() as cur:
             cur.execute(sql, (signal_id, ticket, lot, entry_price, entry_mode, layer_num))
         conn.close()
+        return True
     except Exception as e:
         log.error(f"db.record_trade failed: {e}")
+        return False
 
 
 def ensure_manual_trade(ticket: int, symbol: str, direction: str,
@@ -122,18 +156,19 @@ def ensure_manual_trade(ticket: int, symbol: str, direction: str,
 
 def record_guard_event(guard_name: str, signal_id: str, symbol: str,
                        direction: str, reason: str,
-                       value_actual: str = "", value_required: str = ""):
+                       value_actual: str = "", value_required: str = "",
+                       source_id: str = ""):
     """Log a guard block event so the dashboard can show why a trade was rejected."""
     sql = """
         INSERT INTO guard_events
-            (guard_name, signal_id, symbol, direction, reason, value_actual, value_required)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+            (guard_name, signal_id, symbol, direction, source_id, reason, value_actual, value_required)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
     try:
         conn = get_conn()
         with conn.cursor() as cur:
             cur.execute(sql, (guard_name, signal_id, symbol, direction,
-                              reason, value_actual, value_required))
+                              source_id or None, reason, value_actual, value_required))
         conn.close()
     except Exception as e:
         log.error(f"db.record_guard_event failed: {e}")
@@ -322,7 +357,7 @@ def get_today_zones(symbol: str = None, direction: str = None,
         return []
 
 
-def mark_zone_fired(zone_id: int, signal_id: str):
+def mark_zone_fired(zone_id: int, signal_id: str) -> bool:
     """Mark a zone as fired (one-shot) and link it to a signal."""
     try:
         conn = get_conn()
@@ -331,9 +366,12 @@ def mark_zone_fired(zone_id: int, signal_id: str):
                 "UPDATE mapping_zones SET fired = TRUE, signal_id = %s WHERE id = %s",
                 (signal_id, zone_id),
             )
+            updated = cur.rowcount > 0
         conn.close()
+        return updated
     except Exception as e:
         log.error(f"db.mark_zone_fired failed: {e}")
+        return False
 
 
 def delete_zone(zone_id: int) -> bool:

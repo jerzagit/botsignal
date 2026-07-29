@@ -4,6 +4,7 @@ All configuration loaded from .env — single source of truth.
 """
 
 import os
+from dataclasses import dataclass
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,6 +21,69 @@ YOUR_CHAT_ID    = int(os.getenv("YOUR_CHAT_ID", "0"))
 # ── Mentor's signal group ──────────────────────────────────────────────────────
 SIGNAL_GROUP    = os.getenv("SIGNAL_GROUP", "AssistByHafizCarat")
 
+
+@dataclass(frozen=True)
+class SignalSource:
+    """Telegram signal source configuration."""
+    source_id: str
+    chat: str
+    risk_percent: float
+    parser_profile: str = "hafiz"
+    name: str = ""
+    auto_execute: bool = True
+
+
+SOURCE_RISK_DEFAULT = float(os.getenv("SOURCE_RISK_DEFAULT", "0.10"))
+SOURCE_RISK_MODE = os.getenv("SOURCE_RISK_MODE", "reduce").lower()  # reduce | block
+SOURCE_CONFLICT_MODE = os.getenv("SOURCE_CONFLICT_MODE", "allow").lower()
+MAX_TOTAL_OPEN_RISK = float(os.getenv("MAX_TOTAL_OPEN_RISK", "0.20"))
+
+
+def _parse_bool(value: str, default: bool = True) -> bool:
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_signal_sources(raw: str) -> list[SignalSource]:
+    """
+    Parse SIGNAL_SOURCES.
+
+    Format:
+        source_id:chat:risk_percent:parser_profile:name:auto_execute
+
+    Example:
+        hafiz:-1002083967629:0.10:hafiz:PIPS FIGHTER:true
+
+    Only source_id and chat are required. Missing risk uses SOURCE_RISK_DEFAULT.
+    """
+    sources: list[SignalSource] = []
+    for item in (raw or "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        parts = [p.strip() for p in item.split(":")]
+        if len(parts) < 2:
+            continue
+        source_id = parts[0].lower().replace(" ", "_")
+        chat = parts[1]
+        try:
+            risk_percent = float(parts[2]) if len(parts) > 2 and parts[2] else SOURCE_RISK_DEFAULT
+        except ValueError:
+            risk_percent = SOURCE_RISK_DEFAULT
+        parser_profile = (parts[3] if len(parts) > 3 and parts[3] else "hafiz").lower()
+        name = parts[4] if len(parts) > 4 and parts[4] else source_id
+        auto_execute = _parse_bool(parts[5], True) if len(parts) > 5 else True
+        sources.append(SignalSource(source_id, chat, risk_percent, parser_profile, name, auto_execute))
+    return sources
+
+
+SIGNAL_SOURCES = _parse_signal_sources(os.getenv("SIGNAL_SOURCES", ""))
+if not SIGNAL_SOURCES:
+    SIGNAL_SOURCES = [
+        SignalSource("default", SIGNAL_GROUP, SOURCE_RISK_DEFAULT, "hafiz", "Default", True)
+    ]
+
 # ── Environment mode ──────────────────────────────────────────────────────────
 ENV_MODE = os.getenv("ENV_MODE", "demo").lower()
 _P = "LIVE_" if ENV_MODE == "live" else "DEMO_"
@@ -30,6 +94,11 @@ MT5_LOGIN         = int(os.getenv(_P + "MT5_LOGIN", os.getenv("MT5_LOGIN", "0"))
 MT5_PASSWORD      = os.getenv(_P + "MT5_PASSWORD", os.getenv("MT5_PASSWORD", ""))
 MT5_SERVER        = os.getenv(_P + "MT5_SERVER", os.getenv("MT5_SERVER", ""))
 MT5_SYMBOL_SUFFIX = os.getenv(_P + "MT5_SYMBOL_SUFFIX", os.getenv("MT5_SYMBOL_SUFFIX", ""))
+MT5_ATTACH_EXISTING_FIRST = os.getenv("MT5_ATTACH_EXISTING_FIRST", "true").lower() == "true"
+MT5_ALLOW_TERMINAL_LAUNCH = os.getenv("MT5_ALLOW_TERMINAL_LAUNCH", "false").lower() == "true"
+MT5_LOCK_CONFIG = os.getenv("MT5_LOCK_CONFIG", "false").lower() == "true"
+MT5_AUTO_TOGGLE_AUTOTRADE = os.getenv("MT5_AUTO_TOGGLE_AUTOTRADE", "false").lower() == "true"
+MT5_ALLOW_ACCOUNT_SWITCH = os.getenv("MT5_ALLOW_ACCOUNT_SWITCH", "false").lower() == "true"
 
 # ── Risk management ───────────────────────────────────────────────────────────
 # Symbol-specific risk benchmarks (10% of free margin = N pips of risk)
@@ -105,6 +174,19 @@ DB_NAME     = os.getenv("DB_NAME",     "botsignal")
 DB_USER     = os.getenv("DB_USER",     "root")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
+# Fail closed when MySQL is unavailable. This prevents MT5 entries that cannot
+# be tracked in the dashboard/trade tables.
+TRADE_REQUIRES_DB = os.getenv("TRADE_REQUIRES_DB", "true").lower() == "true"
+MANUAL_TRADE_REQUIRES_DB = os.getenv("MANUAL_TRADE_REQUIRES_DB", "false").lower() == "true"
+DB_CONNECT_TIMEOUT_SECS = int(os.getenv("DB_CONNECT_TIMEOUT_SECS", "3"))
+DASHBOARD_POLLER_ENABLED = os.getenv("DASHBOARD_POLLER_ENABLED", "false").lower() == "true"
+DASHBOARD_MT5_LIVE_ENABLED = os.getenv("DASHBOARD_MT5_LIVE_ENABLED", "false").lower() == "true"
+
+# Startup safety. Drop queued Telegram bot commands after local restarts so old
+# manual entries are not replayed, and fail fast if MT5 cannot initialize.
+TELEGRAM_DROP_PENDING_UPDATES = os.getenv("TELEGRAM_DROP_PENDING_UPDATES", "true").lower() == "true"
+MT5_STARTUP_TIMEOUT_SECS = int(os.getenv("MT5_STARTUP_TIMEOUT_SECS", "60"))
+
 # ── Profit Lock (auto-breakeven + TP override when in profit) ────────────────
 PROFIT_LOCK_ENABLED = os.getenv("PROFIT_LOCK_ENABLED", "true").lower() == "true"
 PROFIT_LOCK_PIPS    = int(os.getenv("PROFIT_LOCK_PIPS", "50"))      # trigger at +N pips profit
@@ -153,6 +235,8 @@ MANUAL_TP1_PIPS     = int(os.getenv("MANUAL_TP1_PIPS",  "50"))      # TP1 distan
 MANUAL_TP2_PIPS     = int(os.getenv("MANUAL_TP2_PIPS",  "80"))      # TP2 distance from entry
 MANUAL_SYMBOL       = os.getenv("MANUAL_SYMBOL", "XAUUSD").upper()  # default symbol
 MANUAL_RISK_PERCENT = float(os.getenv("MANUAL_RISK_PERCENT", "0.10"))  # separate 10% risk
+MANUAL_TRADE_DEDUPE_ENABLED = os.getenv("MANUAL_TRADE_DEDUPE_ENABLED", "true").lower() == "true"
+MANUAL_TRADE_COOLDOWN_SECS = int(os.getenv("MANUAL_TRADE_COOLDOWN_SECS", "60"))
 
 # Gold specific settings
 GOLD_SL_PIPS   = int(os.getenv("GOLD_SL_PIPS",   "50"))
