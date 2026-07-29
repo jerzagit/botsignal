@@ -105,9 +105,22 @@ async def start_map_watcher(bot):
                     created_at=time.time(),
                 )
 
-                # Log to signals table + mark zone fired
-                upsert_signal(signal_id, signal, status="pending")
-                mark_zone_fired(zone["id"], signal_id)
+                # Log to signals table + mark zone fired before executing.
+                # If either write fails, do not trade; otherwise a localhost DB
+                # restart can make the same zone fire repeatedly.
+                signal_logged = upsert_signal(signal_id, signal, status="pending")
+                zone_marked = mark_zone_fired(zone["id"], signal_id) if signal_logged else False
+                if not zone_marked:
+                    log.error(
+                        "Map zone #%s reached but not executed because DB tracking failed",
+                        zone["id"],
+                    )
+                    await _notify(bot, (
+                        "🚨 *AutoZone blocked - database tracking failed*\n"
+                        f"`{zone['symbol']}` {direction.upper()} @ `{price:.2f}`\n"
+                        "_No trade was opened. Start/fix MySQL, then re-arm the zone._"
+                    ))
+                    continue
 
                 log.info(
                     f"Map zone #{zone['id']} fired: {zone['symbol']} "

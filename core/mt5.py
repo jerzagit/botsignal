@@ -20,7 +20,8 @@ from core.config import MT5_PATH, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_SYMBO
                        MAX_SPREAD_PIPS, MIN_RR_RATIO, BLOCK_SAME_DIRECTION_STACK, STACK_MODE, \
                        TRADE_SPLIT, MIN_LOT, SL_MIN_PIPS, TP_ENFORCE_PIPS, \
                        SESSION_FILTER_ENABLED, SESSION_START_HOUR_UTC, SESSION_END_HOUR_UTC, \
-                       MAX_DAILY_LOSS_USD, MAX_DCA_LAYERS_PER_SYMBOL
+                       MAX_DAILY_LOSS_USD, MAX_DCA_LAYERS_PER_SYMBOL, TRADE_REQUIRES_DB, \
+                       MANUAL_TRADE_REQUIRES_DB
 from core.signal import Signal
 from core.risk   import calculate_lot
 
@@ -135,6 +136,20 @@ def execute_trade(signal: Signal, signal_id: str = None,
                 f"🛑 *Trading blocked — daily loss limit reached*\n"
                 f"Today's loss: `${get_daily_loss():.2f}` | Limit: `$MAX_DAILY_LOSS_USD`\n"
                 f"_Wait for reset at midnight or close some positions._"
+            )
+
+    db_required = MANUAL_TRADE_REQUIRES_DB if entry_mode == "manual" else TRADE_REQUIRES_DB
+    if db_required and signal_id:
+        from core.db import is_database_available
+        if not is_database_available():
+            _fire_guard("database", signal, signal_id,
+                        "Database unavailable", "offline", "online")
+            return (
+                "🚨 *Trade blocked - database unavailable*\n"
+                "MySQL is required before opening new tracked trades.\n"
+                "_Start MySQL/dashboard services first, or set "
+                "`MANUAL_TRADE_REQUIRES_DB=false` for manual commands only, or "
+                "`TRADE_REQUIRES_DB=false` if you accept all untracked MT5 entries._"
             )
 
     if not mt5_connect():

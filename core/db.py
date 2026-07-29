@@ -11,7 +11,14 @@ from datetime import datetime, timedelta, timezone
 import pymysql
 import pymysql.cursors
 
-from core.config import DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+from core.config import (
+    DB_HOST,
+    DB_PORT,
+    DB_NAME,
+    DB_USER,
+    DB_PASSWORD,
+    DB_CONNECT_TIMEOUT_SECS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -32,10 +39,26 @@ def get_conn():
         password=DB_PASSWORD,
         cursorclass=pymysql.cursors.DictCursor,
         autocommit=True,
+        connect_timeout=DB_CONNECT_TIMEOUT_SECS,
+        read_timeout=DB_CONNECT_TIMEOUT_SECS,
+        write_timeout=DB_CONNECT_TIMEOUT_SECS,
     )
 
 
-def upsert_signal(signal_id: str, signal, status: str = "pending"):
+def is_database_available() -> bool:
+    """Fast DB health check used by trade guards."""
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+        conn.close()
+        return True
+    except Exception as e:
+        log.error(f"db health check failed: {e}")
+        return False
+
+
+def upsert_signal(signal_id: str, signal, status: str = "pending") -> bool:
     """
     Insert a new signal or update its status.
     Called by listener.py on arrival (pending),
@@ -72,12 +95,14 @@ def upsert_signal(signal_id: str, signal, status: str = "pending"):
                 status,
             ))
         conn.close()
+        return True
     except Exception as e:
         log.error(f"db.upsert_signal failed: {e}")
+        return False
 
 
 def record_trade(signal_id: str, ticket: int, lot: float, entry_price: float,
-                 entry_mode: str = None, layer_num: int = None):
+                 entry_mode: str = None, layer_num: int = None) -> bool:
     """Insert a trade row right after MT5 confirms execution."""
     sql = """
         INSERT INTO trades (signal_id, ticket, lot, entry_price, entry_mode, layer_num)
@@ -89,8 +114,10 @@ def record_trade(signal_id: str, ticket: int, lot: float, entry_price: float,
         with conn.cursor() as cur:
             cur.execute(sql, (signal_id, ticket, lot, entry_price, entry_mode, layer_num))
         conn.close()
+        return True
     except Exception as e:
         log.error(f"db.record_trade failed: {e}")
+        return False
 
 
 def ensure_manual_trade(ticket: int, symbol: str, direction: str,
@@ -330,7 +357,7 @@ def get_today_zones(symbol: str = None, direction: str = None,
         return []
 
 
-def mark_zone_fired(zone_id: int, signal_id: str):
+def mark_zone_fired(zone_id: int, signal_id: str) -> bool:
     """Mark a zone as fired (one-shot) and link it to a signal."""
     try:
         conn = get_conn()
@@ -339,9 +366,12 @@ def mark_zone_fired(zone_id: int, signal_id: str):
                 "UPDATE mapping_zones SET fired = TRUE, signal_id = %s WHERE id = %s",
                 (signal_id, zone_id),
             )
+            updated = cur.rowcount > 0
         conn.close()
+        return updated
     except Exception as e:
         log.error(f"db.mark_zone_fired failed: {e}")
+        return False
 
 
 def delete_zone(zone_id: int) -> bool:

@@ -27,9 +27,12 @@ Exit:
 """
 
 import asyncio
+import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import MetaTrader5 as mt5
 
@@ -50,6 +53,7 @@ log = logging.getLogger(__name__)
 
 # Registry exported for dashboard/future use
 layer_sessions: dict[str, "LayerSession"] = {}
+TRADE_LOG = Path("data/trades.json")
 
 
 @dataclass
@@ -196,6 +200,46 @@ def _get_latest_ticket(signal_id: str, exclude: list = None) -> int | None:
                 return t
     except Exception as e:
         log.warning(f"_get_latest_ticket failed: {e}")
+    return None
+
+
+def _ticket_from_trade_result(result: str) -> int | None:
+    """Extract a ticket from execute_trade's human-readable success message."""
+    m = re.search(r"Ticket:\s*`?#?(\d+)`?", result)
+    if m:
+        return int(m.group(1))
+
+    m = re.search(r"`#(\d+)`", result)
+    if m:
+        return int(m.group(1))
+
+    return None
+
+
+def _latest_local_ticket(signal, lot: float, exclude: list = None) -> int | None:
+    """
+    Fallback ticket lookup from data/trades.json.
+    Used when MySQL is unavailable after MT5 already accepted the order.
+    """
+    exclude = set(exclude or [])
+    try:
+        trades = json.loads(TRADE_LOG.read_text(encoding="utf-8"))
+    except Exception as e:
+        log.warning(f"local trade ticket lookup failed: {e}")
+        return None
+
+    for trade in reversed(trades):
+        ticket = trade.get("ticket")
+        if not ticket or ticket in exclude:
+            continue
+        if trade.get("symbol") != signal.symbol:
+            continue
+        if trade.get("direction") != signal.direction:
+            continue
+        if abs(float(trade.get("lot", 0.0)) - float(lot)) > 0.0001:
+            continue
+        return int(ticket)
+
     return None
 
 
@@ -660,12 +704,28 @@ async def watch_layered_entry(signal, signal_id: str, bot,
                     if "Trade Executed" in result:
                         ticket = _get_latest_ticket(signal_id, exclude=all_own)
                         if not ticket:
-                            import re
-                            m = re.search(r"Ticket:\s*#?(\d+)", result)
-                            if m:
-                                ticket = int(m.group(1))
+                            ticket = _ticket_from_trade_result(result)
+                        if not ticket:
+                            ticket = _latest_local_ticket(
+                                signal,
+                                session.sub_lots[next_idx],
+                                exclude=all_own,
+                            )
                         if ticket:
                             layer_tickets.append(ticket)
+                        else:
+                            layer_blocked = (
+                                "⚠️ Trade was accepted by MT5, but the bot could not "
+                                "identify the ticket. Stopping this layered session to "
+                                "prevent duplicate entries."
+                            )
+                            log.error(
+                                "LayerWatcher [%s]: order executed but ticket unknown; "
+                                "result=%r",
+                                signal_id,
+                                result,
+                            )
+                            break
                     elif "spread too wide" in result or "Market closed" in result:
                         spread_retry = True
                         break   # retry whole layer next cycle
@@ -730,6 +790,17 @@ async def watch_layered_entry(signal, signal_id: str, bot,
 
                 elif layer_blocked:
                     # Guard blocked — no sub-orders placed
+                    if "could not identify the ticket" in layer_blocked:
+                        pending.pop(signal_id, None)
+                        upsert_signal(signal_id, signal, status="blocked")
+                        session.state = "DONE"
+                        await _notify(bot, (
+                            f"🚨 *Layered session stopped - ticket tracking failed*\n\n"
+                            f"{layer_blocked}\n\n"
+                            f"_Check MT5 open positions before restarting the bot._"
+                        ))
+                        return
+
                     if next_idx == 0:
                         # Stack guard on L1: retry each interval until clear or deadline
                         if "position(s) at risk" in layer_blocked:

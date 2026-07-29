@@ -168,6 +168,12 @@ DB_NAME     = os.getenv("DB_NAME",     "botsignal")
 DB_USER     = os.getenv("DB_USER",     "root")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
+# Fail closed when MySQL is unavailable. This prevents MT5 entries that cannot
+# be tracked in the dashboard/trade tables.
+TRADE_REQUIRES_DB = os.getenv("TRADE_REQUIRES_DB", "true").lower() == "true"
+MANUAL_TRADE_REQUIRES_DB = os.getenv("MANUAL_TRADE_REQUIRES_DB", "false").lower() == "true"
+DB_CONNECT_TIMEOUT_SECS = int(os.getenv("DB_CONNECT_TIMEOUT_SECS", "3"))
+
 # ── Profit Lock (auto-breakeven + TP override when in profit) ────────────────
 PROFIT_LOCK_ENABLED = os.getenv("PROFIT_LOCK_ENABLED", "true").lower() == "true"
 PROFIT_LOCK_PIPS    = int(os.getenv("PROFIT_LOCK_PIPS", "50"))      # trigger at +N pips profit
