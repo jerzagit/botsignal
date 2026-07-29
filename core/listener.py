@@ -73,7 +73,10 @@ async def start_listener():
     """Start Telethon, resolve sources, and listen for signals."""
     from core.config import TG_PHONE
     client = TelegramClient("data/session", TG_API_ID, TG_API_HASH)
-    await client.start(phone=TG_PHONE)   # First run: prompts phone + OTP. Session saved after.
+    if TG_PHONE:
+        await client.start(phone=TG_PHONE)
+    else:
+        await client.start()
 
     bot = get_bot()
 

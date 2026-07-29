@@ -223,6 +223,8 @@ MANUAL_TP1_PIPS     = int(os.getenv("MANUAL_TP1_PIPS",  "50"))      # TP1 distan
 MANUAL_TP2_PIPS     = int(os.getenv("MANUAL_TP2_PIPS",  "80"))      # TP2 distance from entry
 MANUAL_SYMBOL       = os.getenv("MANUAL_SYMBOL", "XAUUSD").upper()  # default symbol
 MANUAL_RISK_PERCENT = float(os.getenv("MANUAL_RISK_PERCENT", "0.10"))  # separate 10% risk
+MANUAL_TRADE_DEDUPE_ENABLED = os.getenv("MANUAL_TRADE_DEDUPE_ENABLED", "true").lower() == "true"
+MANUAL_TRADE_COOLDOWN_SECS = int(os.getenv("MANUAL_TRADE_COOLDOWN_SECS", "60"))
 
 # Gold specific settings
 GOLD_SL_PIPS   = int(os.getenv("GOLD_SL_PIPS",   "50"))

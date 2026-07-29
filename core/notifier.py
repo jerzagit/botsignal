@@ -7,7 +7,9 @@ Also handles the button taps and routes to MT5 execution.
 import time
 import uuid
 import asyncio
+import json
 import logging
+from pathlib import Path
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
@@ -15,9 +17,10 @@ from telegram.request import HTTPXRequest
 
 from core.config import (
     BOT_TOKEN, YOUR_CHAT_ID, SIGNAL_EXPIRY, MAP_ENABLED,
-    BREAKEVEN_KEEP_COUNT, LAYER_MODE, LAYER_COUNT, LAYER2_PIPS,
+    BREAKEVEN_KEEP_COUNT,
     ENTRY_MAX_DISTANCE_PIPS, WATCH_INTERVAL_SECS, SL_PIP_SIZE,
     MANUAL_SL_PIPS, MANUAL_TP1_PIPS, MANUAL_TP2_PIPS, MANUAL_SYMBOL,
+    MANUAL_TRADE_DEDUPE_ENABLED, MANUAL_TRADE_COOLDOWN_SECS,
     MT5_SYMBOL_SUFFIX, TREND_ENABLED, FIB_GUARD_ENABLED, FIB_SCANNER_ENABLED,
     MANUAL_RISK_PERCENT,
     GOLD_SL_PIPS, GOLD_TP1_PIPS, GOLD_TP2_PIPS,
@@ -25,7 +28,6 @@ from core.config import (
 from core.signal import Signal
 from core.state  import pending, pending_closes
 from core.mt5    import execute_trade, close_position, set_breakeven, get_open_signal_groups
-from core.layer_watcher import watch_layered_entry
 from core.watcher import watch_and_execute
 from core.db     import (
     upsert_signal, set_snr_levels, get_snr_levels, add_zone, get_today_zones,
@@ -35,9 +37,76 @@ from core.db     import (
 log = logging.getLogger(__name__)
 
 _app: Application = None   # shared app instance
+STARTUP_FILE = Path("data/startup.timestamp")
+PROCESSED_UPDATES_FILE = Path("data/processed_updates.json")
+MANUAL_GUARD_FILE = Path("data/manual_trade_guard.json")
 
 def get_bot() -> Bot:
     return _app.bot
+
+
+def _startup_timestamp() -> int:
+    try:
+        return int(STARTUP_FILE.read_text().strip())
+    except Exception:
+        return 0
+
+
+def _is_replayed_startup_command(update: Update) -> bool:
+    if not update.message or not update.message.date:
+        return False
+    startup_time = _startup_timestamp()
+    if startup_time <= 0:
+        return False
+    return int(update.message.date.timestamp()) < startup_time
+
+
+def _read_json_file(path: Path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def _write_json_file(path: Path, data) -> None:
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _claim_update_once(update: Update) -> bool:
+    """Return False if this Telegram update was already handled before."""
+    if not MANUAL_TRADE_DEDUPE_ENABLED or update.update_id is None:
+        return True
+
+    processed = _read_json_file(PROCESSED_UPDATES_FILE, [])
+    update_id = int(update.update_id)
+    if update_id in processed:
+        return False
+
+    processed.append(update_id)
+    _write_json_file(PROCESSED_UPDATES_FILE, processed[-1000:])
+    return True
+
+
+def _claim_manual_cooldown(symbol: str, direction: str, force: bool = False) -> int:
+    """
+    Return 0 when allowed, or remaining seconds when blocked.
+    The timestamp is written before execution so rapid repeats cannot race.
+    """
+    if force or MANUAL_TRADE_COOLDOWN_SECS <= 0:
+        return 0
+
+    now = int(time.time())
+    key = f"{symbol}:{direction}"
+    state = _read_json_file(MANUAL_GUARD_FILE, {})
+    last = int(state.get(key, 0) or 0)
+    remaining = MANUAL_TRADE_COOLDOWN_SECS - (now - last)
+    if remaining > 0:
+        return remaining
+
+    state[key] = now
+    _write_json_file(MANUAL_GUARD_FILE, state)
+    return 0
 
 
 # ── Confirmation message ───────────────────────────────────────────────────────
@@ -567,6 +636,11 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Checks H1+H4 trend before executing — warns if opposing direction.
     Supports: /goldbuynow, /goldsellnow
     """
+    if _is_replayed_startup_command(update):
+        log.warning("Ignored replayed manual trade command from before startup: %s", update.message.text)
+        await update.message.reply_text("Ignored old trade command from before this bot startup.")
+        return
+
     command = update.message.text.split()[0].lstrip("/").lower()
     if not command.startswith("gold"):
         await update.message.reply_text("This bot is configured for XAUUSD only. Use /goldbuynow or /goldsellnow.")
@@ -574,6 +648,26 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     direction = "buy" if "buy" in command else "sell"
     symbol = "XAUUSD"
+    force = any(arg.lower() == "force" for arg in context.args)
+
+    if not _claim_update_once(update):
+        log.warning("Ignored duplicate Telegram update for manual trade: %s", update.update_id)
+        await update.message.reply_text("Ignored duplicate trade command.")
+        return
+
+    cooldown_remaining = _claim_manual_cooldown(symbol, direction, force=force)
+    if cooldown_remaining > 0:
+        await update.message.reply_text(
+            f"Manual {symbol} {direction.upper()} cooldown active. "
+            f"Try again in {cooldown_remaining}s, or send /{command} force."
+        )
+        log.warning(
+            "Blocked manual %s %s during cooldown: %ss remaining",
+            symbol,
+            direction,
+            cooldown_remaining,
+        )
+        return
     
     # Get current market price from MT5
     import MetaTrader5 as mt5
@@ -702,13 +796,7 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         checks = f"{checks} | {fib_line}" if checks else fib_line
     checks_info = f"\n{checks}" if checks else ""
 
-    if LAYER_MODE and not skip_guards:
-        mode_line = (
-            f"\U0001f522 DCA mode - up to `{LAYER_COUNT}` layers "
-            f"(`{LAYER2_PIPS}p` apart)"
-        )
-    else:
-        mode_line = "\U0001f3af Single entry mode"
+    mode_line = "\U0001f3af Manual single-entry mode"
 
     msg_lines = []
     if warn_lines:
@@ -730,10 +818,7 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def _start_manual_watcher(signal, signal_id, direction_emoji, price, sl, tps_str, trend_line, skip_guards: bool = False):
     """Start the watcher task for a manual trade (shared by direct execute and confirm callback)."""
-    if skip_guards or not LAYER_MODE:
-        watcher_task = watch_and_execute(signal, signal_id, get_bot(), skip_proximity=True)
-    else:
-        watcher_task = watch_layered_entry(signal, signal_id, get_bot(), entry_mode="manual", skip_proximity=True)
+    watcher_task = watch_and_execute(signal, signal_id, get_bot(), skip_proximity=True)
     asyncio.create_task(watcher_task)
 
 
@@ -764,13 +849,7 @@ async def handle_manual_trade_callback(query, context):
 
         _start_manual_watcher(signal, signal_id, direction_emoji, price, signal.sl, tps_str, "")
 
-        if LAYER_MODE:
-            mode_line = (
-                f"\U0001f522 DCA mode - up to `{LAYER_COUNT}` layers "
-                f"(`{LAYER2_PIPS}p` apart)"
-            )
-        else:
-            mode_line = "\U0001f3af Single entry mode"
+        mode_line = "\U0001f3af Manual single-entry mode"
 
         await query.edit_message_text(
             f"\u2705 *Confirmed — executing against trend*\n\n"
@@ -927,13 +1006,7 @@ async def handle_fib_alert_callback(query, context):
     tps_str = f"`{tp1}` | `{tp2}`"
     _start_manual_watcher(signal, signal_id, direction_emoji, price, sl, tps_str, "")
 
-    if LAYER_MODE:
-        mode_line = (
-            f"\U0001f522 DCA mode - up to `{LAYER_COUNT}` layers "
-            f"(`{LAYER2_PIPS}p` apart)"
-        )
-    else:
-        mode_line = "\U0001f3af Single entry mode"
+    mode_line = "\U0001f3af Manual single-entry mode"
 
     await query.edit_message_text(
         f"\u2705 *Fib Alert \u2192 Executing*\n\n"

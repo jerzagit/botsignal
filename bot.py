@@ -105,6 +105,13 @@ def acquire_lock() -> bool:
         except Exception:
             pass
 
+    running_bots = _check_running_bots()
+    if running_bots:
+        print("\nSignalBot is already running:")
+        for bot in running_bots:
+            print(f"  {bot}")
+        return False
+
     PID_FILE.write_text(str(os.getpid()))
     STARTUP_FILE.parent.mkdir(exist_ok=True)
     STARTUP_FILE.write_text(str(int(time.time())))
