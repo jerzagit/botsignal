@@ -9,6 +9,7 @@ import uuid
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -22,13 +23,12 @@ from core.config import (
     MANUAL_SL_PIPS, MANUAL_TP1_PIPS, MANUAL_TP2_PIPS, MANUAL_SYMBOL,
     MANUAL_TRADE_DEDUPE_ENABLED, MANUAL_TRADE_COOLDOWN_SECS,
     MT5_SYMBOL_SUFFIX, TREND_ENABLED, FIB_GUARD_ENABLED, FIB_SCANNER_ENABLED,
-    MANUAL_RISK_PERCENT,
+    MANUAL_RISK_PERCENT, TELEGRAM_DROP_PENDING_UPDATES,
     GOLD_SL_PIPS, GOLD_TP1_PIPS, GOLD_TP2_PIPS,
 )
 from core.signal import Signal
 from core.state  import pending, pending_closes
 from core.mt5    import execute_trade, close_position, set_breakeven, get_open_signal_groups
-from core.watcher import watch_and_execute
 from core.db     import (
     upsert_signal, set_snr_levels, get_snr_levels, add_zone, get_today_zones,
     delete_zone, clear_zones,
@@ -70,7 +70,9 @@ def _read_json_file(path: Path, default):
 
 def _write_json_file(path: Path, data) -> None:
     path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
 
 
 def _claim_update_once(update: Update) -> bool:
@@ -816,10 +818,37 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     log.info(f"/{command}: {symbol} {direction} @ {price} SL={sl} TP1={tp1} TP2={tp2} [{signal_id}]")
 
 
+async def _execute_manual_once(signal, signal_id: str):
+    """Execute one manual MT5 order only, regardless of LAYER_MODE/TRADE_SPLIT."""
+    pending.pop(signal_id, None)
+    tp = signal.tps[0] if signal.tps else None
+    result = await asyncio.get_event_loop().run_in_executor(
+        None,
+        execute_trade,
+        signal,
+        signal_id,
+        None,
+        None,
+        tp,
+        True,
+        "manual",
+        None,
+        True,
+        True,
+        False,
+        False,
+        MANUAL_RISK_PERCENT,
+    )
+    if "Trade Executed" in result:
+        upsert_signal(signal_id, signal, status="executed")
+    else:
+        upsert_signal(signal_id, signal, status="blocked")
+    await get_bot().send_message(chat_id=YOUR_CHAT_ID, text=result, parse_mode="Markdown")
+
+
 def _start_manual_watcher(signal, signal_id, direction_emoji, price, sl, tps_str, trend_line, skip_guards: bool = False):
-    """Start the watcher task for a manual trade (shared by direct execute and confirm callback)."""
-    watcher_task = watch_and_execute(signal, signal_id, get_bot(), skip_proximity=True)
-    asyncio.create_task(watcher_task)
+    """Start manual trade execution (shared by direct execute and confirm callback)."""
+    asyncio.create_task(_execute_manual_once(signal, signal_id))
 
 
 async def handle_manual_trade_callback(query, context):
@@ -1058,6 +1087,9 @@ async def start_notifier():
         _app.add_handler(CommandHandler("trend", cmd_trend))
     await _app.initialize()
     await _app.start()
-    await _app.updater.start_polling()
-    log.info("Telegram notifier started.")
+    await _app.updater.start_polling(drop_pending_updates=TELEGRAM_DROP_PENDING_UPDATES)
+    log.info(
+        "Telegram notifier started (drop_pending_updates=%s).",
+        TELEGRAM_DROP_PENDING_UPDATES,
+    )
     return _app

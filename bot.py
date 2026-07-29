@@ -5,6 +5,7 @@ import signal
 import subprocess
 import sys
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -22,6 +23,7 @@ from core.config import (  # noqa: E402
     ENV_MODE,
     FIB_SCANNER_ENABLED,
     MAP_ENABLED,
+    MT5_STARTUP_TIMEOUT_SECS,
     STRATEGY_ENABLED,
     STRATEGY_LIVE_UNLOCKED,
     TREND_ENABLED,
@@ -44,39 +46,9 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 PID_FILE = Path("data/bot.pid")
+SERVICE_LOCK_DIR = Path("data/service_locks")
 STARTUP_FILE = Path("data/startup.timestamp")
 STARTUP_COOLDOWN = 60  # seconds to wait before processing commands after restart
-
-
-def _check_running_bots() -> list:
-    """Check for any running SignalBot processes (excluding current)."""
-    bots = []
-    current_pid = os.getpid()
-    try:
-        result = subprocess.run(
-            ['wmic', 'process', 'where', "name='python.exe'", 'get', 'ProcessId,CommandLine'],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        for line in result.stdout.strip().split("\n"):
-            if "bot.py" not in line.lower():
-                continue
-            parts = line.strip().split()
-            if len(parts) < 2:
-                continue
-            try:
-                pid = int(parts[0])
-            except ValueError:
-                try:
-                    pid = int(parts[-1])
-                except ValueError:
-                    continue
-            if pid != current_pid:
-                bots.append(line)
-    except Exception:
-        pass
-    return bots
 
 
 def _pid_alive(pid: int) -> bool:
@@ -102,17 +74,25 @@ def acquire_lock() -> bool:
                 print(f"\nSignalBot is already running (PID {old_pid}).")
                 return False
             print(f"\nStale lock file found (PID {old_pid}), replacing.")
+            PID_FILE.unlink()
         except Exception:
-            pass
+            try:
+                PID_FILE.unlink()
+            except Exception:
+                pass
 
-    running_bots = _check_running_bots()
-    if running_bots:
-        print("\nSignalBot is already running:")
-        for bot in running_bots:
-            print(f"  {bot}")
+    try:
+        fd = os.open(str(PID_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w") as f:
+            f.write(str(os.getpid()))
+    except FileExistsError:
+        try:
+            old_pid = int(PID_FILE.read_text().strip())
+        except Exception:
+            old_pid = 0
+        print(f"\nSignalBot lock exists (PID {old_pid or 'unknown'}).")
         return False
 
-    PID_FILE.write_text(str(os.getpid()))
     STARTUP_FILE.parent.mkdir(exist_ok=True)
     STARTUP_FILE.write_text(str(int(time.time())))
     return True
@@ -125,6 +105,58 @@ def release_lock() -> None:
                 path.unlink()
         except Exception as exc:
             log.warning("Could not remove %s: %s", path, exc)
+
+
+def _service_lock_path(name: str) -> Path:
+    return SERVICE_LOCK_DIR / f"{name}.pid"
+
+
+def _claim_service_lock(name: str) -> bool:
+    """Return False if this service is already active or locked by a live process."""
+    SERVICE_LOCK_DIR.mkdir(parents=True, exist_ok=True)
+    lock_path = _service_lock_path(name)
+    current_pid = os.getpid()
+
+    for task in asyncio.all_tasks():
+        if task is not asyncio.current_task() and not task.done() and task.get_name() == name:
+            log.error("Service %s duplicate start blocked: task already exists.", name)
+            return False
+
+    if lock_path.exists():
+        try:
+            old_pid = int(lock_path.read_text().strip())
+            if old_pid == current_pid:
+                log.error("Service %s duplicate start blocked: lock already held by this bot.", name)
+                return False
+            if _pid_alive(old_pid):
+                log.error("Service %s duplicate start blocked: PID %s already holds lock.", name, old_pid)
+                return False
+            log.warning("Service %s stale lock found (PID %s), replacing.", name, old_pid)
+            lock_path.unlink()
+        except Exception:
+            try:
+                lock_path.unlink()
+            except Exception:
+                return False
+
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        with os.fdopen(fd, "w") as f:
+            f.write(str(current_pid))
+        return True
+    except FileExistsError:
+        log.error("Service %s duplicate start blocked: lock was claimed concurrently.", name)
+        return False
+
+
+def _release_service_locks(tasks: dict[str, asyncio.Task]) -> None:
+    for name in tasks:
+        lock_path = _service_lock_path(name)
+        try:
+            if lock_path.exists():
+                lock_path.unlink()
+        except Exception as exc:
+            log.warning("Could not remove service lock %s: %s", lock_path, exc)
 
 
 def get_startup_timestamp() -> int:
@@ -179,30 +211,45 @@ def _service_enabled(name: str, enabled: bool, live_unlocked: bool | None = None
 def _create_service_tasks(bot) -> dict[str, asyncio.Task]:
     tasks: dict[str, asyncio.Task] = {}
 
-    tasks["listener"] = asyncio.create_task(start_listener(), name="listener")
+    def start_service(name: str, factory: Callable[[], Awaitable[object]]) -> None:
+        if name in tasks:
+            log.error("Service %s duplicate start blocked: already registered.", name)
+            return
+        if not _claim_service_lock(name):
+            raise RuntimeError(f"Duplicate service start blocked: {name}")
+        tasks[name] = asyncio.create_task(factory(), name=name)
+        log.info("Service %-12s started", name)
 
-    if _service_enabled("autozone", MAP_ENABLED):
-        tasks["autozone"] = asyncio.create_task(start_map_watcher(bot), name="autozone")
+    try:
+        start_service("listener", start_listener)
 
-    if _service_enabled("trend", TREND_ENABLED):
-        from core.trend_analyzer import start_trend_watcher
+        if _service_enabled("autozone", MAP_ENABLED):
+            start_service("autozone", lambda: start_map_watcher(bot))
 
-        tasks["trend"] = asyncio.create_task(start_trend_watcher(bot), name="trend")
+        if _service_enabled("trend", TREND_ENABLED):
+            from core.trend_analyzer import start_trend_watcher
 
-    if _service_enabled("fib_scanner", FIB_SCANNER_ENABLED):
-        from core.trend_analyzer import start_fib_scanner
+            start_service("trend", lambda: start_trend_watcher(bot))
 
-        tasks["fib_scanner"] = asyncio.create_task(start_fib_scanner(bot), name="fib_scanner")
+        if _service_enabled("fib_scanner", FIB_SCANNER_ENABLED):
+            from core.trend_analyzer import start_fib_scanner
 
-    if _service_enabled("strategy", STRATEGY_ENABLED, STRATEGY_LIVE_UNLOCKED):
-        from core.strategy import start_strategy
+            start_service("fib_scanner", lambda: start_fib_scanner(bot))
 
-        tasks["strategy"] = asyncio.create_task(start_strategy(bot), name="strategy")
+        if _service_enabled("strategy", STRATEGY_ENABLED, STRATEGY_LIVE_UNLOCKED):
+            from core.strategy import start_strategy
 
-    if _service_enabled("agent", AGENT_ENABLED, AGENT_LIVE_UNLOCKED or not AGENT_AUTO_EXECUTE):
-        from agent.agent import start_agent
+            start_service("strategy", lambda: start_strategy(bot))
 
-        tasks["agent"] = asyncio.create_task(start_agent(), name="agent")
+        if _service_enabled("agent", AGENT_ENABLED, AGENT_LIVE_UNLOCKED or not AGENT_AUTO_EXECUTE):
+            from agent.agent import start_agent
+
+            start_service("agent", start_agent)
+    except Exception:
+        for task in tasks.values():
+            task.cancel()
+        _release_service_locks(tasks)
+        raise
 
     return tasks
 
@@ -227,6 +274,7 @@ async def _cancel_tasks(tasks: dict[str, asyncio.Task]) -> None:
             task.cancel()
     if tasks:
         await asyncio.gather(*tasks.values(), return_exceptions=True)
+    _release_service_locks(tasks)
 
 
 async def main_async() -> int:
@@ -238,18 +286,23 @@ async def main_async() -> int:
         return 1
 
     try:
-        mt5_future = asyncio.ensure_future(
-            asyncio.get_event_loop().run_in_executor(None, mt5_connect_test)
-        )
-        app, (ok, message) = await asyncio.gather(
-            start_notifier(),
-            mt5_future,
-        )
+        try:
+            ok, message = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(None, mt5_connect_test),
+                timeout=MT5_STARTUP_TIMEOUT_SECS,
+            )
+        except asyncio.TimeoutError:
+            log.error(
+                "MT5 startup check timed out after %ss. Telegram notifier was not started.",
+                MT5_STARTUP_TIMEOUT_SECS,
+            )
+            return 1
         if not ok:
             log.error("MT5 connection failed: %s", message)
             return 1
         log.info("MT5 startup check OK: %s", message)
 
+        app = await start_notifier()
         bot = get_bot()
         tasks = _create_service_tasks(bot)
 

@@ -94,6 +94,11 @@ MT5_LOGIN         = int(os.getenv(_P + "MT5_LOGIN", os.getenv("MT5_LOGIN", "0"))
 MT5_PASSWORD      = os.getenv(_P + "MT5_PASSWORD", os.getenv("MT5_PASSWORD", ""))
 MT5_SERVER        = os.getenv(_P + "MT5_SERVER", os.getenv("MT5_SERVER", ""))
 MT5_SYMBOL_SUFFIX = os.getenv(_P + "MT5_SYMBOL_SUFFIX", os.getenv("MT5_SYMBOL_SUFFIX", ""))
+MT5_ATTACH_EXISTING_FIRST = os.getenv("MT5_ATTACH_EXISTING_FIRST", "true").lower() == "true"
+MT5_ALLOW_TERMINAL_LAUNCH = os.getenv("MT5_ALLOW_TERMINAL_LAUNCH", "false").lower() == "true"
+MT5_LOCK_CONFIG = os.getenv("MT5_LOCK_CONFIG", "false").lower() == "true"
+MT5_AUTO_TOGGLE_AUTOTRADE = os.getenv("MT5_AUTO_TOGGLE_AUTOTRADE", "false").lower() == "true"
+MT5_ALLOW_ACCOUNT_SWITCH = os.getenv("MT5_ALLOW_ACCOUNT_SWITCH", "false").lower() == "true"
 
 # ── Risk management ───────────────────────────────────────────────────────────
 # Symbol-specific risk benchmarks (10% of free margin = N pips of risk)
@@ -174,6 +179,13 @@ DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 TRADE_REQUIRES_DB = os.getenv("TRADE_REQUIRES_DB", "true").lower() == "true"
 MANUAL_TRADE_REQUIRES_DB = os.getenv("MANUAL_TRADE_REQUIRES_DB", "false").lower() == "true"
 DB_CONNECT_TIMEOUT_SECS = int(os.getenv("DB_CONNECT_TIMEOUT_SECS", "3"))
+DASHBOARD_POLLER_ENABLED = os.getenv("DASHBOARD_POLLER_ENABLED", "false").lower() == "true"
+DASHBOARD_MT5_LIVE_ENABLED = os.getenv("DASHBOARD_MT5_LIVE_ENABLED", "false").lower() == "true"
+
+# Startup safety. Drop queued Telegram bot commands after local restarts so old
+# manual entries are not replayed, and fail fast if MT5 cannot initialize.
+TELEGRAM_DROP_PENDING_UPDATES = os.getenv("TELEGRAM_DROP_PENDING_UPDATES", "true").lower() == "true"
+MT5_STARTUP_TIMEOUT_SECS = int(os.getenv("MT5_STARTUP_TIMEOUT_SECS", "60"))
 
 # ── Profit Lock (auto-breakeven + TP override when in profit) ────────────────
 PROFIT_LOCK_ENABLED = os.getenv("PROFIT_LOCK_ENABLED", "true").lower() == "true"

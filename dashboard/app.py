@@ -35,6 +35,7 @@ from core.config import (
     MANUAL_SL_PIPS, MANUAL_TP1_PIPS, MANUAL_TP2_PIPS,
     MANUAL_SYMBOL, MANUAL_RISK_PERCENT,
     SIGNAL_SOURCES, SOURCE_RISK_MODE, SOURCE_CONFLICT_MODE, MAX_TOTAL_OPEN_RISK,
+    DASHBOARD_POLLER_ENABLED, DASHBOARD_MT5_LIVE_ENABLED,
 )
 from dashboard.poller import start_poller
 
@@ -290,23 +291,29 @@ def api_guards_config():
 @app.route("/api/guards/live")
 def api_guards_live():
     """Connect to MT5 briefly and return live account health values."""
+    if not DASHBOARD_MT5_LIVE_ENABLED:
+        return jsonify({
+            "disabled": True,
+            "error": "Dashboard MT5 live probe disabled",
+            "margin_level": None,
+            "margin_level_ok": None,
+            "spread_pips": None,
+            "spread_ok": None,
+            "balance": None,
+            "equity": None,
+            "free_margin": None,
+            "dca_estimate": None,
+        })
+
     try:
-        import sys, os
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         import MetaTrader5 as mt5
-        from core.config import MT5_PATH, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER
+        from core.mt5 import mt5_connect
 
-        kwargs = {"path": MT5_PATH} if MT5_PATH else {}
-        kwargs["login"] = MT5_LOGIN
-        kwargs["password"] = MT5_PASSWORD
-        kwargs["server"] = MT5_SERVER
-        if not mt5.initialize(**kwargs):
-            return jsonify({"error": "MT5 not running"}), 503
-
+        if not mt5_connect():
+            return jsonify({"error": "MT5 unavailable"}), 503
         acc  = mt5.account_info()
         symbol = "XAUUSD" + MT5_SYMBOL_SUFFIX
         tick = mt5.symbol_info_tick(symbol)
-        mt5.shutdown()
 
         spread_pips = round((tick.ask - tick.bid) / SL_PIP_SIZE, 2) if tick else None
         margin_level = round(acc.margin_level, 1) if acc and acc.margin > 0 else None
@@ -455,5 +462,8 @@ def api_performance():
 
 
 if __name__ == "__main__":
-    start_poller()
+    if DASHBOARD_POLLER_ENABLED:
+        start_poller()
+    else:
+        logging.info("Dashboard poller disabled; MT5 will not be touched by dashboard startup.")
     app.run(host="0.0.0.0", port=5000, debug=False)
