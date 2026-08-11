@@ -301,6 +301,19 @@ async def main_async() -> int:
             log.error("MT5 connection failed: %s", message)
             return 1
         log.info("MT5 startup check OK: %s", message)
+        try:
+            from core.daily_profit_sync import sync_today_closed_deals
+
+            summary = await asyncio.get_event_loop().run_in_executor(
+                None, sync_today_closed_deals
+            )
+            log.info(
+                "Startup daily profit sync: %s closed position(s), pnl=$%.2f",
+                summary["synced"],
+                summary["pnl"],
+            )
+        except Exception as exc:
+            log.error("Startup daily profit sync failed: %s", exc, exc_info=exc)
 
         app = await start_notifier()
         bot = get_bot()

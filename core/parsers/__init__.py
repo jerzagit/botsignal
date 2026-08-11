@@ -20,4 +20,7 @@ def parse_with_profile(profile: str, text: str) -> Optional[Signal]:
     if normalized == "bobby":
         from core.parsers.bobby import parse_signal as parse_bobby_signal
         return parse_bobby_signal(text)
+    if normalized == "tradewhatyousee":
+        from core.parsers.tradewhatyousee import parse_signal as parse_tradewhatyousee_signal
+        return parse_tradewhatyousee_signal(text)
     return parse_signal(text)

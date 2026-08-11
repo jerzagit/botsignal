@@ -143,6 +143,10 @@ def parse_signal(text: str) -> Optional[Signal]:
     Parse a Telegram message into a Signal.
     Returns None if the message doesn't look like a valid trade signal.
     """
+    from core.parsers.flexible import parse_signal as parse_flexible_signal
+
+    return parse_flexible_signal(text)
+
     original = text
     text = text.strip().lower()
 
