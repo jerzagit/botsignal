@@ -124,6 +124,28 @@ def _ensure_autotrade_enabled():
         log.warning("Could not send Alt+T keystroke: %s", exc)
 
 
+def _channel_trade_tickets() -> set[int]:
+    """Return open DB tickets that belong to configured Telegram sources."""
+    try:
+        from core.db import get_conn
+
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.ticket
+                FROM trades t
+                JOIN signals s ON s.signal_id = t.signal_id
+                WHERE t.outcome IS NULL
+                  AND COALESCE(s.source_id, '') <> ''
+            """)
+            rows = cur.fetchall()
+        conn.close()
+        return {int(r["ticket"]) for r in rows}
+    except Exception as exc:
+        log.warning("Could not read channel trade tickets: %s", exc)
+        return set()
+
+
 def _safe_autotrade_check() -> bool:
     """Fail closed when MT5 AutoTrading is off; optionally toggle only if configured."""
     global _mt5_last_connect_error
@@ -387,6 +409,9 @@ def execute_trade(signal: Signal, signal_id: str = None,
         stacked   = [p for p in existing if p.type == same_type]
         if own_tickets:
             stacked = [p for p in stacked if p.ticket not in own_tickets]
+        if getattr(signal, "source_id", ""):
+            channel_tickets = _channel_trade_tickets()
+            stacked = [p for p in stacked if p.ticket in channel_tickets]
         at_risk   = [p for p in stacked if round(p.sl, 2) != round(p.price_open, 2)]
         if at_risk:
             if STACK_MODE == "reduce":

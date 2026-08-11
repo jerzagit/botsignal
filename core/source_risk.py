@@ -46,8 +46,8 @@ def _open_risk_by_source() -> tuple[dict[str, float], float]:
     """
     Return (source_used, total_used) in account currency.
 
-    Uses DB rows where outcome is still NULL. The dashboard poller is expected to
-    mark closed trades, so this matches the bot's local view of open exposure.
+    Uses DB rows where outcome is still NULL and the signal has a real source_id.
+    Manual/personal cover trades stay outside Telegram source buckets.
     """
     source_used: dict[str, float] = {}
     total_used = 0.0
@@ -68,6 +68,7 @@ def _open_risk_by_source() -> tuple[dict[str, float], float]:
                 JOIN signals s ON t.signal_id = s.signal_id
                 WHERE t.outcome IS NULL
                   AND t.lot IS NOT NULL
+                  AND COALESCE(s.source_id, '') <> ''
             """)
             rows = cur.fetchall()
         conn.close()
