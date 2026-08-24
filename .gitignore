@@ -10,8 +10,8 @@ data/startup.timestamp
 data/processed_updates.json
 data/manual_trade_guard.json
 data/service_locks/
-dash_*_service.log
-dash_*_safe.log
+dash_*.log
+bot_*.log
 
 # Python
 __pycache__/
