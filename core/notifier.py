@@ -28,7 +28,7 @@ from core.config import (
 )
 from core.signal import Signal
 from core.state  import pending, pending_closes
-from core.mt5    import execute_trade, close_position, set_breakeven, get_open_signal_groups, set_tp_for_profit
+from core.mt5    import execute_trade, close_position, set_breakeven, get_open_signal_groups, set_tp_for_profit, get_margin_call_info
 from core.db     import (
     upsert_signal, set_snr_levels, get_snr_levels, add_zone, get_today_zones,
     delete_zone, clear_zones,
@@ -851,6 +851,34 @@ async def cmd_set_profit_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     log.info(f"/profit {target_usd} {symbol or 'ALL'} executed")
 
 
+# ── Margin Call check command ──────────────────────────────────────────────
+
+async def cmd_margin_call(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /mc — show margin call price level for all open positions.
+    /mc XAUUSD — show for specific symbol.
+    /mc 50 — set margin call threshold to 50%.
+    """
+    args = context.args or []
+    symbol = None
+    mc_level = 100.0  # default margin call level
+
+    for arg in args:
+        arg_upper = arg.upper()
+        if arg_upper.replace(".", "").isdigit():
+            mc_level = float(arg)
+        else:
+            symbol = arg_upper
+
+    await update.message.reply_text("⏳ Calculating margin call level...")
+
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, get_margin_call_info, symbol, mc_level
+    )
+    await update.message.reply_text(result, parse_mode="Markdown")
+    log.info(f"/mc {symbol or 'ALL'} mc_level={mc_level} executed")
+
+
 async def _execute_manual_once(signal, signal_id: str):
     """Execute one manual MT5 order only, regardless of LAYER_MODE/TRADE_SPLIT."""
     pending.pop(signal_id, None)
@@ -1117,6 +1145,7 @@ async def start_notifier():
     _app.add_handler(CommandHandler("goldbuynow", cmd_trade_now))
     _app.add_handler(CommandHandler("goldsellnow", cmd_trade_now))
     _app.add_handler(CommandHandler("profit", cmd_set_profit_tp))
+    _app.add_handler(CommandHandler("mc", cmd_margin_call))
     if TREND_ENABLED:
         _app.add_handler(CommandHandler("trend", cmd_trend))
     await _app.initialize()

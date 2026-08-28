@@ -962,7 +962,150 @@ def set_tp_for_profit(target_profit_usd: float, symbol: str = None) -> str:
     return header + "\n".join(results)
 
 
-def get_open_signal_groups(symbol: str = None) -> list:
+def get_margin_call_info(symbol: str = None, margin_call_level: float = 100.0) -> str:
+    """
+    Calculate margin call price level for open positions.
+
+    Shows at what price each position would trigger margin call, and the
+    distance (in pips) from current price.
+
+    Args:
+        symbol: filter to this symbol only, or None for all
+        margin_call_level: margin level % that triggers MC (default 100%)
+
+    Returns:
+        Human-readable margin call analysis.
+    """
+    if not mt5_connect():
+        return "❌ Could not connect to MT5."
+
+    account = mt5.account_info()
+    if account is None:
+        mt5.shutdown()
+        return "❌ Could not get account info."
+
+    equity = account.equity
+    margin = account.margin
+    free_margin = account.margin_free
+    current_margin_level = account.margin_level
+
+    if margin == 0:
+        mt5.shutdown()
+        return "✅ No open positions — no margin call risk."
+
+    # Margin call threshold equity
+    mc_equity = margin * margin_call_level / 100.0
+    allowed_loss = equity - mc_equity
+
+    if allowed_loss <= 0:
+        mt5.shutdown()
+        return (
+            f"🔴 *MARGIN CALL IMMINENT*\n"
+            f"Current level: `{current_margin_level:.1f}%`\n"
+            f"MC threshold: `{margin_call_level:.0f}%`\n"
+            f"_Close positions immediately!_"
+        )
+
+    # Get all open positions
+    positions = mt5.positions_get()
+    if not positions:
+        mt5.shutdown()
+        return "✅ No open positions."
+
+    if symbol:
+        suffix = MT5_SYMBOL_SUFFIX
+        target = symbol.upper() + suffix
+        positions = [p for p in positions if p.symbol == target]
+
+    if not positions:
+        mt5.shutdown()
+        return f"✅ No open positions for {symbol or 'all symbols'}."
+
+    # Calculate total lot and current price
+    total_lot = sum(p.volume for p in positions)
+    total_pnl = sum(p.profit for p in positions)
+
+    # Get symbol info for tick calculations
+    sym_info = mt5.symbol_info(positions[0].symbol)
+    if sym_info is None:
+        mt5.shutdown()
+        return "❌ Could not get symbol info."
+
+    tick_size = sym_info.trade_tick_size
+    tick_value = sym_info.trade_tick_value
+    pip_size = SL_PIP_SIZE  # 0.1 for XAUUSD
+
+    if tick_size == 0 or tick_value == 0:
+        mt5.shutdown()
+        return "❌ Invalid tick info."
+
+    # Profit per lot per pip
+    # For XAUUSD: 1 pip = 0.1 price = 10 ticks, tick_value = $1.0
+    # So profit per lot per pip = 10 * $1.0 = $10
+    profit_per_pip_per_lot = (pip_size / tick_size) * tick_value
+
+    # Pips before margin call
+    pips_to_mc = allowed_loss / (total_lot * profit_per_pip_per_lot)
+    price_distance = pips_to_mc * pip_size
+
+    # Determine direction from positions
+    has_buy = any(p.type == 0 for p in positions)
+    has_sell = any(p.type == 1 for p in positions)
+
+    # Get current price
+    tick = mt5.symbol_info_tick(positions[0].symbol)
+    if tick is None:
+        mt5.shutdown()
+        return "❌ Could not get current price."
+
+    current_price = tick.bid  # use bid as reference
+
+    # Calculate MC price based on dominant direction
+    # For BUY: price needs to DROP to trigger MC
+    # For SELL: price needs to RISE to trigger MC
+    if has_buy and not has_sell:
+        mc_price = current_price - price_distance
+        direction = "BUY"
+    elif has_sell and not has_buy:
+        mc_price = current_price + price_distance
+        direction = "SELL"
+    else:
+        # Mixed positions — show both scenarios
+        mc_price_buy = current_price - price_distance
+        mc_price_sell = current_price + price_distance
+        direction = "MIXED"
+
+    mt5.shutdown()
+
+    # Build result
+    lines = [
+        f"📊 *Margin Call Analysis*\n",
+        f"Equity: `${equity:,.2f}` | Margin: `${margin:,.2f}`",
+        f"Current Level: `{current_margin_level:.1f}%` | MC Threshold: `{margin_call_level:.0f}%`",
+        f"Allowed Loss: `${allowed_loss:,.2f}`",
+        f"Total Lot: `{total_lot}` | Floating P&L: `${total_pnl:+,.2f}`\n",
+    ]
+
+    if direction == "MIXED":
+        lines.append(f"⚠️ *Mixed positions (BUY + SELL)*")
+        lines.append(f"MC if BUY wins: `{mc_price_buy:.2f}` ({pips_to_mc:.0f}p away)")
+        lines.append(f"MC if SELL wins: `{mc_price_sell:.2f}` ({pips_to_mc:.0f}p away)")
+    elif direction == "BUY":
+        lines.append(f"🟢 *{direction} positions* — price must DROP to trigger MC")
+        lines.append(f"Current: `{current_price:.2f}`")
+        lines.append(f"MC Price: `{mc_price:.2f}` ({pips_to_mc:.0f}p / {price_distance:.2f} pts away)")
+    else:
+        lines.append(f"🔴 *{direction} positions* — price must RISE to trigger MC")
+        lines.append(f"Current: `{current_price:.2f}`")
+        lines.append(f"MC Price: `{mc_price:.2f}` ({pips_to_mc:.0f}p / {price_distance:.2f} pts away)")
+
+    # Risk assessment
+    if current_margin_level < 200:
+        lines.append(f"\n⚠️ *WARNING: Margin level below 200% — high risk!*")
+    elif current_margin_level < 300:
+        lines.append(f"\n⚡ *CAUTION: Margin level below 300%*")
+
+    return "\n".join(lines)
     """
     Return open MT5 positions grouped by their signal_id from MySQL.
     Each group is a dict with signal info + list of open positions + total P&L.
