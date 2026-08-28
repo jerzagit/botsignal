@@ -28,7 +28,7 @@ from core.config import (
 )
 from core.signal import Signal
 from core.state  import pending, pending_closes
-from core.mt5    import execute_trade, close_position, set_breakeven, get_open_signal_groups
+from core.mt5    import execute_trade, close_position, set_breakeven, get_open_signal_groups, set_tp_for_profit
 from core.db     import (
     upsert_signal, set_snr_levels, get_snr_levels, add_zone, get_today_zones,
     delete_zone, clear_zones,
@@ -818,6 +818,39 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
     log.info(f"/{command}: {symbol} {direction} @ {price} SL={sl} TP1={tp1} TP2={tp2} [{signal_id}]")
 
 
+# ── Profit TP command ──────────────────────────────────────────────────────
+
+async def cmd_set_profit_tp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /profit 100 — set TP on all open XAUUSD positions to hit $100 total profit.
+    /profit 100 EURUSD — set TP for specific symbol.
+    """
+    args = context.args or []
+    if not args:
+        await update.message.reply_text(
+            "Usage: `/profit 100` or `/profit 100 XAUUSD`\n"
+            "Sets TP on all open positions to achieve the target USD profit.",
+            parse_mode="Markdown"
+        )
+        return
+
+    try:
+        target_usd = float(args[0])
+    except ValueError:
+        await update.message.reply_text("Invalid amount. Usage: `/profit 100`", parse_mode="Markdown")
+        return
+
+    symbol = args[1].upper() if len(args) > 1 else None
+
+    await update.message.reply_text(f"⏳ Setting TP for ${target_usd:.2f} profit...")
+
+    result = await asyncio.get_event_loop().run_in_executor(
+        None, set_tp_for_profit, target_usd, symbol
+    )
+    await update.message.reply_text(result, parse_mode="Markdown")
+    log.info(f"/profit {target_usd} {symbol or 'ALL'} executed")
+
+
 async def _execute_manual_once(signal, signal_id: str):
     """Execute one manual MT5 order only, regardless of LAYER_MODE/TRADE_SPLIT."""
     pending.pop(signal_id, None)
@@ -1083,6 +1116,7 @@ async def start_notifier():
     _app.add_handler(CommandHandler("clearmap", cmd_clearmap))
     _app.add_handler(CommandHandler("goldbuynow", cmd_trade_now))
     _app.add_handler(CommandHandler("goldsellnow", cmd_trade_now))
+    _app.add_handler(CommandHandler("profit", cmd_set_profit_tp))
     if TREND_ENABLED:
         _app.add_handler(CommandHandler("trend", cmd_trend))
     await _app.initialize()
