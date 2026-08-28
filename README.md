@@ -472,6 +472,52 @@ PROFIT_LOCK_TP_PIPS=100        # push TP to +100 pips from entry
 
 ---
 
+## Margin Call Check — `/mc`
+
+Check at what price your open positions would trigger a margin call. Shows the MC price level and how far (in pips) from current price.
+
+### Usage
+
+```
+/mc              → all positions, 100% MC threshold
+/mc XAUUSD       → specific symbol only
+/mc 50           → custom MC threshold (50%)
+/mc XAUUSD 50    → both symbol + custom threshold
+```
+
+### Example output
+
+```
+📊 Margin Call Analysis
+
+Equity: $461.37 | Margin: $82.92
+Current Level: 556.4% | MC Threshold: 100%
+Allowed Loss: $378.45
+Total Lot: 0.09 | Floating P&L: $-117.95
+
+🟢 BUY positions — price must DROP to trigger MC
+Current: 4593.63
+MC Price: 4551.58 (421p / 42.05 pts away)
+```
+
+### What it shows
+
+- **Current margin level** — your account's margin level %
+- **MC threshold** — the margin level that triggers margin call (default 100%)
+- **Allowed loss** — how much floating loss before MC triggers
+- **MC price** — the price level where MC would hit
+- **Distance** — pips and points from current price to MC price
+
+### Risk levels
+
+| Margin Level | Status |
+|---|---|
+| > 300% | ✅ Safe |
+| 200–300% | ⚠️ Caution |
+| < 200% | 🔴 High risk |
+
+---
+
 ## Trade guard system
 
 Every trade — and **every layer** in DCA mode — passes through **6 sequential guards** before an order hits MT5. Guards run inside `execute_trade()` in `core/mt5.py`.
