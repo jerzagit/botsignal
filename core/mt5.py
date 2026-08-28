@@ -1106,6 +1106,9 @@ def get_margin_call_info(symbol: str = None, margin_call_level: float = 100.0) -
         lines.append(f"\n⚡ *CAUTION: Margin level below 300%*")
 
     return "\n".join(lines)
+
+
+def get_open_signal_groups(symbol: str = None) -> list:
     """
     Return open MT5 positions grouped by their signal_id from MySQL.
     Each group is a dict with signal info + list of open positions + total P&L.
