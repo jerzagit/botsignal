@@ -367,6 +367,8 @@ Map SNR levels and buy/sell zones each morning via Telegram. The bot auto-enters
 /zones                                   — list today's zones + SNR
 /delzone 3                               — delete zone #3
 /clearmap                                — clear all zones + SNR
+/profit 100                              — set TP for $100 profit target
+/mc                                      — check margin call price level
 ```
 
 ### SL/TP auto-pick
@@ -384,6 +386,37 @@ Map SNR levels and buy/sell zones each morning via Telegram. The bot auto-enters
 - Zones expire at midnight Malaysia time
 - Fully automatic — no EXECUTE/SKIP button needed
 - Dashboard shows AutoZone panel with SNR levels and zone status
+
+---
+
+## Profit TP Command — `/profit`
+
+Set TP on all open positions to achieve a target USD profit.
+
+```
+/profit 100          → all XAUUSD positions
+/profit 50 XAUUSD    → specific symbol
+/profit 200          → bigger target
+```
+
+**How it works:** Calculates TP distance based on total lot size and distributes profit proportionally across positions.
+
+---
+
+## Margin Call Check — `/mc`
+
+Check at what price your open positions would trigger a margin call.
+
+```
+/mc              → all positions, 100% MC threshold
+/mc XAUUSD       → specific symbol
+/mc 50           → custom threshold (50%)
+```
+
+**Output shows:**
+- Current margin level vs MC threshold
+- Allowed loss before MC
+- MC price level and distance in pips
 
 ---
 
