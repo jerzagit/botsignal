@@ -447,7 +447,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
     sl_distance  = abs(signal.entry_mid - signal.sl)
     sl_pips_calc = sl_distance / SL_PIP_SIZE
 
-    # Build effective TP list — override if Hafiz's SL is tight (< SL_MIN_PIPS)
+    # Build effective TP list — override if signal's SL is tight (< SL_MIN_PIPS)
     effective_tps = list(signal.tps)
     tp_override_note = ""
     if sl_pips_calc < SL_MIN_PIPS:
@@ -520,7 +520,7 @@ def execute_trade(signal: Signal, signal_id: str = None,
                 f"_Likely news event or off-hours. Wait for spread to normalise._"
             )
 
-    # ── GUARD 6: Entry proximity — price must be near Hafiz's entry zone ─────
+    # ── GUARD 6: Entry proximity — price must be near signal's entry zone ─────
     # Skipped for L2+ layers (they are intentionally outside zone by design)
     if not skip_proximity:
         distance_pts  = max(0.0, max(signal.entry_low - price, price - signal.entry_high))

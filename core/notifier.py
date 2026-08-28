@@ -716,7 +716,7 @@ async def cmd_trade_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tp1 = round(price - tp1_dist, 2)
         tp2 = round(price - tp2_dist, 2)
 
-    # Build Signal object (same as Hafiz signal)
+    # Build Signal object (same as channel signal)
     signal = Signal(
         symbol=symbol,
         direction=direction,

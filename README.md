@@ -1,6 +1,6 @@
 # SignalBot
 
-Fully automatic Telegram-to-MT5 trading bot. Reads your mentor's signals, watches price, and builds positions using DCA-style layered entries — no tapping required. Includes **AutoZone** for mapping SNR levels and auto-entering when price reaches your zones.
+Fully automatic Telegram-to-MT5 trading bot. Reads signals from any Telegram channel, watches price, and builds positions using DCA-style layered entries — no tapping required. Includes **AutoZone** for mapping SNR levels and auto-entering when price reaches your zones.
 
 ---
 
@@ -9,7 +9,7 @@ Fully automatic Telegram-to-MT5 trading bot. Reads your mentor's signals, watche
 ### Standard mode (`LAYER_MODE=false`)
 
 ```
-Hafiz posts signal in Telegram group
+Signal posted in Telegram group
         ↓
 Telethon reads it (as your account — no admin needed)
         ↓
@@ -31,7 +31,7 @@ Dashboard records trades, polls outcome every 60 seconds
 ### Layered DCA mode (`LAYER_MODE=true`)
 
 ```
-Hafiz posts signal in Telegram group
+Signal posted in Telegram group
         ↓
 Bot calculates total lot + DYNAMIC layer count
   (min(LAYER_COUNT, int(total_lot / MIN_LOT)))
@@ -185,7 +185,7 @@ or channels, configure `SIGNAL_SOURCES`:
 
 ```env
 # source_id:chat:risk_percent:parser_profile:name:auto_execute
-SIGNAL_SOURCES=hafiz:-1002083967629:0.10:hafiz:PIPS_FIGHTER:true,bobby:@Bobbylivetrade:0.10:bobby:BOBBY_LIVE:false
+SIGNAL_SOURCES=mirror1:-1002083967629:0.10:default:MIRROR_1:true,bobby:@Bobbylivetrade:0.10:bobby:BOBBY_LIVE:false
 SOURCE_RISK_MODE=reduce
 SOURCE_CONFLICT_MODE=allow
 MAX_TOTAL_OPEN_RISK=0.20
@@ -325,7 +325,7 @@ tp_split = min(int(lot_per_layer / MIN_LOT), MAX_SUB_SPLITS)
 sub_lot  = lot_per_layer / tp_split
 ```
 
-Sub-orders cycle through Hafiz's TPs:
+Sub-orders cycle through signal's TPs:
 
 ```
 Signal: SELL @5023-5026, SL 5029, TP1 5018, TP2 5016
@@ -428,7 +428,7 @@ Midnight MY: Zones auto-expire (valid_date no longer matches)
 
 | | Signal Entry | AutoZone Entry |
 |---|---|---|
-| Trigger | Hafiz sends signal in group | Price reaches mapped zone |
+| Trigger | Signal posted in group | Price reaches mapped zone |
 | SL/TP | From signal | Auto-picked from SNR levels |
 | Entry mode | Single or DCA (LAYER_MODE) | Same — follows LAYER_MODE |
 | Guards | All 6 guards | All 6 guards |
@@ -585,7 +585,7 @@ sl 4981.50
 tp 4993.50
 tp 4991.50
 Trade At Your Own Risk
-T.A.Y.O.R @AssistByHafizCarat
+T.A.Y.O.R
 ```
 
 Supported:

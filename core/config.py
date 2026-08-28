@@ -19,7 +19,7 @@ BOT_TOKEN       = os.getenv("BOT_TOKEN", "")
 YOUR_CHAT_ID    = int(os.getenv("YOUR_CHAT_ID", "0"))
 
 # ── Mentor's signal group ──────────────────────────────────────────────────────
-SIGNAL_GROUP    = os.getenv("SIGNAL_GROUP", "AssistByHafizCarat")
+SIGNAL_GROUP    = os.getenv("SIGNAL_GROUP", "")
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,7 @@ class SignalSource:
     source_id: str
     chat: str
     risk_percent: float
-    parser_profile: str = "hafiz"
+    parser_profile: str = "default"
     name: str = ""
     auto_execute: bool = True
 
@@ -49,11 +49,11 @@ def _parse_signal_sources(raw: str) -> list[SignalSource]:
     """
     Parse SIGNAL_SOURCES.
 
-    Format:
-        source_id:chat:risk_percent:parser_profile:name:auto_execute
+        Format:
+            source_id:chat:risk_percent:parser_profile:name:auto_execute
 
-    Example:
-        hafiz:-1002083967629:0.10:hafiz:PIPS FIGHTER:true
+        Example:
+            mirror1:-1002083967629:0.10:default:MIRROR_1:true
 
     Only source_id and chat are required. Missing risk uses SOURCE_RISK_DEFAULT.
     """
@@ -71,7 +71,7 @@ def _parse_signal_sources(raw: str) -> list[SignalSource]:
             risk_percent = float(parts[2]) if len(parts) > 2 and parts[2] else SOURCE_RISK_DEFAULT
         except ValueError:
             risk_percent = SOURCE_RISK_DEFAULT
-        parser_profile = (parts[3] if len(parts) > 3 and parts[3] else "hafiz").lower()
+        parser_profile = (parts[3] if len(parts) > 3 and parts[3] else "default").lower()
         name = parts[4] if len(parts) > 4 and parts[4] else source_id
         auto_execute = _parse_bool(parts[5], True) if len(parts) > 5 else True
         sources.append(SignalSource(source_id, chat, risk_percent, parser_profile, name, auto_execute))
@@ -81,7 +81,7 @@ def _parse_signal_sources(raw: str) -> list[SignalSource]:
 SIGNAL_SOURCES = _parse_signal_sources(os.getenv("SIGNAL_SOURCES", ""))
 if not SIGNAL_SOURCES:
     SIGNAL_SOURCES = [
-        SignalSource("default", SIGNAL_GROUP, SOURCE_RISK_DEFAULT, "hafiz", "Default", True)
+        SignalSource("default", SIGNAL_GROUP, SOURCE_RISK_DEFAULT, "default", "Default", True)
     ]
 
 # ── Environment mode ──────────────────────────────────────────────────────────
@@ -126,7 +126,7 @@ BREAKEVEN_KEEP_COUNT = int(os.getenv("BREAKEVEN_KEEP_COUNT", "2"))
 TRADE_SPLIT = int(os.getenv("TRADE_SPLIT", "1"))
 
 # ── Entry price proximity guard ───────────────────────────────────────────────
-# Max allowed distance (in pips) between current price and Hafiz's entry zone.
+# Max allowed distance (in pips) between current price and signal entry zone.
 # If price is further away than this, the trade is blocked — signal came too early.
 ENTRY_MAX_DISTANCE_PIPS = int(os.getenv("ENTRY_MAX_DISTANCE_PIPS", "50"))
 
@@ -145,12 +145,12 @@ MAX_SPREAD_PIPS = float(os.getenv(_P + "MAX_SPREAD_PIPS",
 # ── Reward:Risk ratio guard ────────────────────────────────────────────────────
 # Minimum TP1:SL ratio required to allow the trade.
 # 1.0 = break-even math. Professional standard is 1.5.
-# If Hafiz's TP is smaller than the SL, skip — bad risk math.
+# If signal's TP is smaller than the SL, skip — bad risk math.
 MIN_RR_RATIO = float(os.getenv("MIN_RR_RATIO", "1.4"))
 
 # ── Auto TP enforcement ────────────────────────────────────────────────────────
-# If Hafiz's SL is tight (< SL_MIN_PIPS), auto-override TP to TP_ENFORCE_PIPS
-# to ensure minimum reward. If SL >= SL_MIN_PIPS, trust Hafiz's TP.
+# If signal's SL is tight (< SL_MIN_PIPS), auto-override TP to TP_ENFORCE_PIPS
+# to ensure minimum reward. If SL >= SL_MIN_PIPS, trust signal's TP.
 SL_MIN_PIPS      = int(os.getenv("SL_MIN_PIPS",      "50"))   # pips threshold
 TP_ENFORCE_PIPS  = int(os.getenv("TP_ENFORCE_PIPS",  "70"))   # override TP to this
 
@@ -161,7 +161,7 @@ TP_ENFORCE_PIPS  = int(os.getenv("TP_ENFORCE_PIPS",  "70"))   # override TP to t
 BLOCK_SAME_DIRECTION_STACK = os.getenv("BLOCK_SAME_DIRECTION_STACK", "true").lower() == "true"
 STACK_MODE = os.getenv("STACK_MODE", "reduce").lower()
 
-# ── SL sanity check (warns if Hafiz's SL is outside normal range) ─────────────
+# ── SL sanity check (warns if signal's SL is outside normal range) ─────────────
 # For XAUUSD: 1 pip = 0.1 price units  →  50 pips = 5.0 pts, 70 pips = 7.0 pts
 SL_PIP_SIZE     = float(os.getenv("SL_PIP_SIZE",     "0.1"))   # price units per pip
 SL_WARN_MIN_PIPS = int(os.getenv("SL_WARN_MIN_PIPS", "50"))    # warn if SL < this

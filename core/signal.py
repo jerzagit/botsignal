@@ -76,7 +76,7 @@ class CloseAlert:
 
 def parse_close_alert(text: str) -> Optional[CloseAlert]:
     """
-    Detect Hafiz's early-close / early-profit messages.
+    Detect early-close / early-profit messages from signal channels.
 
     Supported triggers (case insensitive):
         Setup failed:

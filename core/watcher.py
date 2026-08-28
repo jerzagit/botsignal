@@ -1,7 +1,7 @@
 """
 core/watcher.py
 Price watcher — monitors price after a signal arrives and auto-executes
-when price enters Hafiz's entry zone.
+when price enters the signal's entry zone.
 
 Flow:
   1. Signal detected -> watcher task starts
