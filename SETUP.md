@@ -67,22 +67,22 @@ For full account switching guide (STD ↔ USC, demo ↔ live), see **USC_SETUP.m
 
 ```env
 # ── Telegram User Account ─────────────────────────────
-TG_API_ID=23476310
-TG_API_HASH=...
-BOT_TOKEN=...                  # from @BotFather
-YOUR_CHAT_ID=516045412         # from @userinfobot
-SIGNAL_GROUP=-1002083967629    # PIPS FIGHTER 2026 numeric ID
+TG_API_ID=your_api_id
+TG_API_HASH=your_api_hash
+BOT_TOKEN=your_bot_token                  # from @BotFather
+YOUR_CHAT_ID=your_chat_id         # from @userinfobot
+SIGNAL_GROUP=your_signal_group_id    # numeric ID
 
 # ── Environment Mode ──────────────────────────────────
 ENV_MODE=demo                  # demo or live — switches everything below
 
 # ── MT5 Account ───────────────────────────────────────
 MT5_PATH=C:\Program Files\MetaTrader 5\terminal64.exe
-DEMO_MT5_LOGIN=1067995          # STD demo account
-DEMO_MT5_SERVER=VTMarkets-Demo
+DEMO_MT5_LOGIN=your_demo_login          # STD demo account
+DEMO_MT5_SERVER=YourBroker-Demo
 DEMO_MT5_SYMBOL_SUFFIX=-VIP
-LIVE_MT5_LOGIN=26578318         # USC live account (cent)
-LIVE_MT5_SERVER=VTMarkets-Live 3
+LIVE_MT5_LOGIN=your_live_login         # USC live account (cent)
+LIVE_MT5_SERVER=YourBroker-Live 3
 LIVE_MT5_SYMBOL_SUFFIX=-STDc   # USC suffix — change to -STD for Standard live
 
 # ── Risk Management ───────────────────────────────────
