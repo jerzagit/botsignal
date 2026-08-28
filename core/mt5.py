@@ -124,6 +124,28 @@ def _ensure_autotrade_enabled():
         log.warning("Could not send Alt+T keystroke: %s", exc)
 
 
+def _channel_trade_tickets() -> set[int]:
+    """Return open DB tickets that belong to configured Telegram sources."""
+    try:
+        from core.db import get_conn
+
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT t.ticket
+                FROM trades t
+                JOIN signals s ON s.signal_id = t.signal_id
+                WHERE t.outcome IS NULL
+                  AND COALESCE(s.source_id, '') <> ''
+            """)
+            rows = cur.fetchall()
+        conn.close()
+        return {int(r["ticket"]) for r in rows}
+    except Exception as exc:
+        log.warning("Could not read channel trade tickets: %s", exc)
+        return set()
+
+
 def _safe_autotrade_check() -> bool:
     """Fail closed when MT5 AutoTrading is off; optionally toggle only if configured."""
     global _mt5_last_connect_error
@@ -387,6 +409,9 @@ def execute_trade(signal: Signal, signal_id: str = None,
         stacked   = [p for p in existing if p.type == same_type]
         if own_tickets:
             stacked = [p for p in stacked if p.ticket not in own_tickets]
+        if getattr(signal, "source_id", ""):
+            channel_tickets = _channel_trade_tickets()
+            stacked = [p for p in stacked if p.ticket in channel_tickets]
         at_risk   = [p for p in stacked if round(p.sl, 2) != round(p.price_open, 2)]
         if at_risk:
             if STACK_MODE == "reduce":
@@ -806,6 +831,135 @@ def modify_sl_tp(ticket: int, new_sl: float = None, new_tp: float = None) -> str
 
     direction = "BUY" if pos.type == 0 else "SELL"
     return f"✅ Modified {pos.symbol} {direction} #{ticket} SL->{request['sl']} TP->{request['tp']}"
+
+
+def set_tp_for_profit(target_profit_usd: float, symbol: str = None) -> str:
+    """
+    Set TP on all open positions to achieve a target total USD profit.
+
+    For each position, calculates the TP price that would yield its share of
+    the target profit based on its lot size relative to total lot.
+
+    Args:
+        target_profit_usd: desired total profit in USD (e.g. 100 for $100)
+        symbol: filter to this symbol only (e.g. "XAUUSD"), or None for all
+
+    Returns:
+        Human-readable result message.
+    """
+    if not mt5_connect():
+        return "❌ Could not connect to MT5."
+
+    positions = mt5.positions_get()
+    if not positions:
+        mt5.shutdown()
+        return "❌ No open positions found."
+
+    if symbol:
+        suffix = MT5_SYMBOL_SUFFIX
+        target = symbol.upper() + suffix
+        positions = [p for p in positions if p.symbol == target]
+
+    if not positions:
+        mt5.shutdown()
+        sym_label = symbol or "all symbols"
+        return f"❌ No open positions found for {sym_label}."
+
+    # Group by direction (buy/sell) — can't mix TP logic
+    buys  = [p for p in positions if p.type == 0]
+    sells = [p for p in positions if p.type == 1]
+
+    results = []
+    modified = 0
+
+    for group, direction_label, is_buy in [(buys, "BUY", True), (sells, "SELL", False)]:
+        if not group:
+            continue
+
+        total_lot = sum(p.volume for p in group)
+        if total_lot == 0:
+            continue
+
+        # Get tick info for this symbol
+        sym_info = mt5.symbol_info(group[0].symbol)
+        if sym_info is None:
+            results.append(f"❌ Could not get symbol info for {group[0].symbol}")
+            continue
+
+        tick_size = sym_info.trade_tick_size
+        tick_value = sym_info.trade_tick_value
+        if tick_size == 0 or tick_value == 0:
+            results.append(f"❌ Invalid tick info for {group[0].symbol}")
+            continue
+
+        for pos in group:
+            # Each position gets profit proportional to its lot
+            pos_profit_share = target_profit_usd * (pos.volume / total_lot)
+
+            # profit = lots * (tp_distance / tick_size) * tick_value
+            # tp_distance = pos_profit_share * tick_size / tick_value / lots
+            # But we need to account for current floating P&L too
+            # TP should be set so that CLOSING at TP yields target_profit_usd total
+            # Current profit is already floating, so we need:
+            #   remaining_profit = target_profit_usd - current_floating
+            #   per lot remaining = remaining_profit / total_lot
+            #   tp_distance = per_lot_remaining * tick_size / tick_value / pos.volume
+
+            # Actually simpler: set TP so that closed P&L = target for this position
+            # For a BUY: profit = volume * (close_price - open_price) / tick_size * tick_value
+            # close_price (TP) = open_price + profit * tick_size / (volume * tick_value)
+
+            # But we want ALL positions combined to hit target_profit_usd
+            # So each position's TP should give it its proportional share
+            profit_per_pos = target_profit_usd * (pos.volume / total_lot)
+
+            # Calculate TP distance from entry
+            tp_distance = profit_per_pos * tick_size / (pos.volume * tick_value)
+            if tp_distance <= 0:
+                continue
+
+            if is_buy:
+                new_tp = round(pos.price_open + tp_distance, 2)
+            else:
+                new_tp = round(pos.price_open - tp_distance, 2)
+
+            # Don't set TP worse than current SL direction
+            # (safety: TP should be in profit direction)
+            if is_buy and new_tp <= pos.price_open:
+                continue
+            if not is_buy and new_tp >= pos.price_open:
+                continue
+
+            request = {
+                "action":   mt5.TRADE_ACTION_SLTP,
+                "position": pos.ticket,
+                "symbol":   pos.symbol,
+                "sl":       pos.sl,
+                "tp":       new_tp,
+            }
+
+            result = mt5.order_send(request)
+            if result.retcode == mt5.TRADE_RETCODE_DONE:
+                modified += 1
+                results.append(
+                    f"✅ #{pos.ticket} {direction_label} {pos.volume} lot "
+                    f"TP→ `{new_tp}` (target: ${profit_per_pos:.2f})"
+                )
+            else:
+                results.append(
+                    f"❌ #{pos.ticket} failed: `{result.comment}`"
+                )
+
+    mt5.shutdown()
+
+    if modified == 0:
+        return "❌ No positions were modified.\n" + "\n".join(results)
+
+    header = (
+        f"🎯 *TP set for ${target_profit_usd:.2f} profit*\n"
+        f"Modified {modified} position(s)\n"
+    )
+    return header + "\n".join(results)
 
 
 def get_open_signal_groups(symbol: str = None) -> list:
