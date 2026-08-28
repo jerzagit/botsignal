@@ -6,7 +6,7 @@
 |---|---|
 | `TG_API_ID` | ✅ Done |
 | `TG_API_HASH` | ✅ Done |
-| `BOT_TOKEN` | ✅ Done — @Hafiz_Carat_Signal_Bot |
+| `BOT_TOKEN` | ✅ Done — Your bot from @BotFather |
 | `YOUR_CHAT_ID` | ✅ Done |
 | `SIGNAL_GROUP` | ✅ Done — PIPS FIGHTER 2026 (`-1002083967629`) |
 | `MT5_PATH` | ✅ Done — VT Markets MT5 terminal path |
@@ -37,7 +37,7 @@
 2. Open **VT Markets MT5 as Administrator** and log in
 3. Click **Algo Trading** button in MT5 toolbar — must be **green**
 4. Run `python bot.py` in terminal
-5. Check Telegram for **"SignalBot is LIVE!"** from @Hafiz_Carat_Signal_Bot
+5. Check Telegram for **"SignalBot is LIVE!"** from your bot
 6. (Optional) Run `python dashboard/app.py` for the dashboard
 7. (Optional) Run `ngrok http 5000` to access dashboard remotely
 
@@ -67,22 +67,22 @@ For full account switching guide (STD ↔ USC, demo ↔ live), see **USC_SETUP.m
 
 ```env
 # ── Telegram User Account ─────────────────────────────
-TG_API_ID=23476310
-TG_API_HASH=...
-BOT_TOKEN=...                  # from @BotFather
-YOUR_CHAT_ID=516045412         # from @userinfobot
-SIGNAL_GROUP=-1002083967629    # PIPS FIGHTER 2026 numeric ID
+TG_API_ID=your_api_id
+TG_API_HASH=your_api_hash
+BOT_TOKEN=your_bot_token                  # from @BotFather
+YOUR_CHAT_ID=your_chat_id         # from @userinfobot
+SIGNAL_GROUP=your_signal_group_id    # numeric ID
 
 # ── Environment Mode ──────────────────────────────────
 ENV_MODE=demo                  # demo or live — switches everything below
 
 # ── MT5 Account ───────────────────────────────────────
 MT5_PATH=C:\Program Files\MetaTrader 5\terminal64.exe
-DEMO_MT5_LOGIN=1067995          # STD demo account
-DEMO_MT5_SERVER=VTMarkets-Demo
+DEMO_MT5_LOGIN=your_demo_login          # STD demo account
+DEMO_MT5_SERVER=YourBroker-Demo
 DEMO_MT5_SYMBOL_SUFFIX=-VIP
-LIVE_MT5_LOGIN=26578318         # USC live account (cent)
-LIVE_MT5_SERVER=VTMarkets-Live 3
+LIVE_MT5_LOGIN=your_live_login         # USC live account (cent)
+LIVE_MT5_SERVER=YourBroker-Live 3
 LIVE_MT5_SYMBOL_SUFFIX=-STDc   # USC suffix — change to -STD for Standard live
 
 # ── Risk Management ───────────────────────────────────
@@ -137,7 +137,7 @@ MAX_SPREAD_PIPS=3
 MIN_RR_RATIO=1.4               # TP must be 1.4× the SL distance
 
 # ── Auto TP Enforcement ───────────────────────────────
-# If Hafiz's SL < SL_MIN_PIPS, auto-override TP to TP_ENFORCE_PIPS
+# If signal's SL < SL_MIN_PIPS, auto-override TP to TP_ENFORCE_PIPS
 SL_MIN_PIPS=50
 TP_ENFORCE_PIPS=70
 
@@ -195,7 +195,7 @@ When all upper sub-orders TP → all deepest sub-orders move to breakeven (free 
 
 **TP splitting in layered mode:**
 
-Each layer's lot is dynamically split into up to `MAX_SUB_SPLITS` (default 4) sub-orders, cycling through Hafiz's TPs:
+Each layer's lot is dynamically split into up to `MAX_SUB_SPLITS` (default 4) sub-orders, cycling through signal's TPs:
 
 ```
 Signal with 2 TPs, L1 lot = 0.11 (MAX_SUB_SPLITS=4):
@@ -316,10 +316,10 @@ then capped by `max_by_sl` above.
 
 ## Auto TP Enforcement
 
-| Hafiz SL | Hafiz TP | Bot action |
+| Signal SL | Signal TP | Bot action |
 |---|---|---|
 | < 50 pips | any | TP auto-adjusted to **70 pips** from `entry_mid` |
-| ≥ 50 pips | any | Use Hafiz's TP as-is |
+| ≥ 50 pips | any | Use signal's TP as-is |
 
 You'll see this note in Telegram when TP is overridden:
 ```
@@ -358,7 +358,7 @@ PROFIT_LOCK_TP_PIPS=100
 
 Map SNR levels and buy/sell zones each morning via Telegram. The bot auto-enters when price reaches a zone.
 
-### Commands (send to @Hafiz_Carat_Signal_Bot)
+### Commands (send to your bot)
 
 ```
 /snr XAUUSD 5007 5014 5022 5035 5043    — set today's SNR levels
