@@ -27,6 +27,11 @@ $live = Get-CimInstance Win32_Process |
 
 if ($proc.HasExited) {
     Write-Host "[ERROR] Bot exited with code: $($proc.ExitCode)"
+    $logPath = Join-Path $root "logs\bot.log"
+    if (Test-Path $logPath) {
+        Write-Host "[ERROR] Last lines from logs\bot.log:"
+        Get-Content $logPath -Tail 15 | ForEach-Object { Write-Host $_ }
+    }
     exit 1
 }
 

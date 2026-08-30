@@ -1,0 +1,446 @@
+# SignalBot — Historical Backtest / Replay Readiness Report
+
+**Generated:** 2026-08-29  
+**Branch audited:** `dev`  
+**Scope:** Audit + architecture preparation (no live strategy behaviour change)  
+**LIVE strategy behaviour changed:** **NO**
+
+---
+
+## 0. Executive verdict
+
+| Question | Answer |
+|----------|--------|
+| Can we replay 6–12 months through the *same* production rule engine today? | **NOT READY** end-to-end |
+| Is there a pure, testable decision core we can reuse? | **PARTIALLY** — `strategy.evaluate_breakout_retest` |
+| Is the product primarily a Fib/SND structure engine? | **NO** — production is **Telegram signal → watcher → MT5**, plus optional AutoZone / Fib-alert / strategy loops |
+| Biggest blockers | Live MT5 ticks + account equity, wall-clock expiry/session, in-memory daily loss, I/O-coupled watchers |
+
+**Overall readiness:** **PARTIALLY READY** (scaffolding started; production engine not yet replayable)
+
+---
+
+## 1. CURRENT RUNTIME ARCHITECTURE
+
+### 1.1 What actually runs in production
+
+```
+┌─────────────────────────────── Windows host ───────────────────────────────┐
+│  bot.py (SignalBot)                                                         │
+│    ├─ MT5 connect test                                                      │
+│    ├─ daily_profit_sync.sync_today_closed_deals                             │
+│    ├─ notifier.start_notifier  (python-telegram-bot polling)                │
+│    ├─ listener.start_listener  (Telethon — ALWAYS ON)                       │
+│    ├─ map_watcher          if MAP_ENABLED                                   │
+│    ├─ trend_watcher        if TREND_ENABLED                                 │
+│    ├─ fib_scanner          if FIB_SCANNER_ENABLED                           │
+│    ├─ strategy.start_strategy if STRATEGY_ENABLED                           │
+│    └─ agent.start_agent    if AGENT_ENABLED  (heartbeat only in practice)   │
+│                                                                             │
+│  dashboard/app.py (optional)                                                │
+│    └─ poller (outcomes / profit-lock / add_daily_loss) if enabled           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 1.2 Primary production flow (Telegram signal)
+
+```
+Telegram channel message
+        ↓
+core/listener.py :: on_new_message
+        ↓
+parse_close_alert  OR  parse_with_profile(...)
+        ↓
+core/state.py pending[signal_id] + core/db.py upsert_signal("pending")
+        ↓
+auto_execute?
+   ├─ false → dry-run Telegram notify only
+   └─ true
+        ↓
+LAYER_MODE?
+   ├─ true  → core/layer_watcher.py :: watch_layered_entry
+   └─ false → core/watcher.py :: watch_and_execute
+        ↓
+price enters zone / layer trigger (live tick poll every WATCH_INTERVAL_SECS)
+        ↓
+core/mt5.py :: execute_trade(...)   ← ALL major guards live here
+        ↓
+MetaTrader5.order_send (magic 20250101)
+        ↓
+DB record_trade + data/trades.json
+        ↓
+Telegram result → YOUR_CHAT_ID
+```
+
+### 1.3 Stage map (actual code)
+
+| Stage | File | Function / class | Input | Output | State / side effects | External |
+|-------|------|------------------|-------|--------|----------------------|----------|
+| Candle source (strategy/trend/fib) | `core/mt5` via MetaTrader5 | `copy_rates_from_pos` | symbol, TF, count | OHLC arrays | none | MT5 |
+| Tick source (entries) | `core/mt5.py`, watchers | `symbol_info_tick` | symbol | bid/ask | none | MT5 |
+| Signal ingest | `core/listener.py` | `on_new_message` | Telegram message | Signal / CloseAlert | `pending`, DB signal | Telethon |
+| Parse | `core/signal.py`, `core/parsers/*` | `parse_with_profile` | text | Signal | none | — |
+| Trend engine | `core/trend_analyzer.py` | `analyze_timeframe`, `start_trend_watcher` | MT5 H1/H4 rates | BULL/BEAR/NEUTRAL | `_last_direction` | MT5, Telegram |
+| Fib (narrow) | `core/trend_analyzer.py` | `check_fib_entry`, `start_fib_scanner` | H1 opposite candle + price | zone / alert | `_fib_alerted`, `fib_pending` | MT5, Telegram |
+| Structure vote | `core/trend_analyzer.py` | `detect_structure` | last ~4 bars | HH/HL vs LH/LL vote | none | — |
+| AutoZone | `core/map_watcher.py` | `start_map_watcher` | DB zones + tick | Signal + trade | `mark_zone_fired` | MT5, DB, Telegram |
+| Strategy setup | `core/strategy.py` | `evaluate_breakout_retest`, `scan_once` | M15 candles + H1/H4 dirs | StrategyDecision | `LAST_DECISION`, DB | MT5, Telegram |
+| Candidate (strategy) | `evaluate_breakout_retest` | — | candles | buy/sell/wait/skip | none (pure) | — |
+| Guards | `core/mt5.py` | `execute_trade` | Signal + flags | tickets or block string | `guard_events` | MT5, DB |
+| Lot | `core/risk.py` | `calculate_lot` | account + SL | lot | none | MT5 account |
+| Source risk | `core/source_risk.py` | `apply_source_risk_bucket` | open risk | allow/reduce/block | DB reads | DB |
+| Execution | `core/mt5.py` | `order_send` wrappers | request | fill / error | trades DB + JSON | MT5 |
+| Trade mgmt | `watcher` / `layer_watcher` / `poller` | profit lock, trail, BE | open positions | SLTP mods | positions | MT5 |
+| Notifications | `core/notifier.py` + callers | `send_message` / `reply_text` | text | delivered msg | Telegram | Bot API |
+| Persistence | `core/db.py`, `core/state.py` | upserts / pending | rows | MySQL / memory | files under `data/` | MySQL |
+
+### 1.4 Secondary auto-entry paths
+
+1. **AutoZone** — manual `/snr` + `/map` → `map_watcher` → `execute_trade` (`entry_mode=mapped`)
+2. **Strategy** — M15 breakout-retest → `execute_trade` (`entry_mode=strategy`, `skip_proximity=True`)
+3. **Manual gold** — `/goldbuynow|/goldsellnow` → `execute_trade` (`entry_mode=manual`, skips proximity/RR/session)
+4. **Fib alert button** — scanner alert → user taps BUY/SELL NOW → manual pipeline
+
+### 1.5 Critical finding: agent signal path unwired
+
+`agent/agent.py :: agent_handle_signal` can execute / confirm, but **listener never calls it**.  
+`start_agent()` only announces + hourly heartbeats when agent hours are active.
+
+---
+
+## 2. TRIGGER INVENTORY
+
+| trigger_name | source | condition | state_before → after | side_effect | notification | execution |
+|--------------|--------|-----------|----------------------|-------------|--------------|-----------|
+| TELEGRAM_SIGNAL | `listener.on_new_message` | parseable signal | — → `pending[id]` | DB pending | watching / dry-run | starts watcher |
+| CLOSE_ALERT | `listener` + `parse_close_alert` | phrase match | — → `pending_closes` | plan UI | close confirmation | on button only |
+| WATCHER_TICK | `watcher.watch_and_execute` | interval | pending | poll tick | retry/block/exec | maybe `execute_trade` |
+| LAYER_TICK | `layer_watcher.watch_layered_entry` | interval | layer_sessions | place layers / BE / trail | layer msgs | maybe `execute_trade` |
+| SIGNAL_EXPIRED | watcher/layer | `created_at+SIGNAL_EXPIRY` | pending → removed | DB expired | expired msg | no |
+| AUTOZONE_FIRE | `map_watcher` | price in zone, unfired | zone.fired=0→1 | DB | AutoZone msg | `execute_trade` |
+| TREND_CHANGED | `start_trend_watcher` | H1/H4 overall change | `_last_direction` update | — | Direction Change | no |
+| FIB_ZONE_SCAN | `start_fib_scanner` | price in 0–38.2% H1 pullback | alert cooldown | buttons | Fib Entry Alert | on user click |
+| STRATEGY_SCAN | `start_strategy` | interval | LAST_DECISION | maybe trade | strategy executed | maybe |
+| AGENT_HEARTBEAT | `agent_status_loop` | hourly in window | — | — | Heartbeat | no |
+| PROFIT_LOCK_WATCHER | `watcher._monitor_profit_lock` | +N pips | SL/TP | modify_sl_tp | Profit Lock | SLTP |
+| PROFIT_LOCK_POLLER | `poller.check_profit_lock` | ~60s | SL/TP | order_send SLTP | — | SLTP |
+| TRAIL_STOP | watcher/layer | after lock | SL | modify | Trailing Stop | SLTP |
+| LAYER_BE_FREERIDE | layer_watcher | upper TPs done | SL→BE | set_breakeven | free-ride msg | SLTP |
+| STARTUP_DEAL_SYNC | `daily_profit_sync` | bot start | DB trades | upsert closed | — | no |
+| MANUAL_CMD | notifier | /gold* | cooldown claim | trade | status | `execute_trade` |
+| DASHBOARD_OUTCOME | poller | ticket closed | trade.outcome | DB | — | no |
+
+**Not present as automatic engines (despite roadmap language):** classic multi-swing Fib lifecycle, SND auto-detection, pivot registry with left/right confirmation bars.
+
+---
+
+## 3. GUARD INVENTORY
+
+### 3.1 Central gate — `core/mt5.py :: execute_trade`
+
+| guard_id | name | condition | recorded via `_fire_guard`? | skip flag |
+|----------|------|-----------|------------------------------|-----------|
+| GUARD_SESSION | Session filter | UTC hour outside window | no (string return) | `skip_session` |
+| GUARD_DAILY_LOSS | Max daily loss USD | `get_daily_loss() >= MAX_DAILY_LOSS_USD` | no | — |
+| GUARD_DATABASE | DB required | TRADE/MANUAL requires DB & down | yes `database` | — |
+| GUARD_MT5_CONNECT | MT5 connect | connect fail / no account | no | — |
+| GUARD_MARGIN | Margin level | `margin_level < MIN_MARGIN_LEVEL` | yes `margin` | — |
+| GUARD_STACK | Same-direction stack | at-risk same dir; mode block | yes `stack` | `skip_stack_check` |
+| GUARD_DCA_CAP | Max DCA layers/symbol | `len(own_tickets) >= MAX_DCA_LAYERS_PER_SYMBOL` | no | — |
+| GUARD_RR | Min RR | after TP enforce, `rr < MIN_RR_RATIO` | yes `rr_ratio` | `skip_rr_check` |
+| GUARD_SYMBOL | Symbol | missing / not selectable | no | — |
+| GUARD_TICK | Tick | no tick | no | — |
+| GUARD_SPREAD | Spread | `> MAX_SPREAD_PIPS` | yes `spread` | `skip_spread_check` |
+| GUARD_PROXIMITY | Entry proximity | distance > `ENTRY_MAX_DISTANCE_PIPS` | yes `proximity` | `skip_proximity` |
+| GUARD_LOT | Lot calc | `calculate_lot` → 0 | yes `lot_calc` | — |
+| GUARD_SOURCE_RISK | Source risk bucket | reduce/block per source + global | yes `source_risk` | no source_id → skip |
+
+**Soft adjustments (not hard blocks):** tight-SL auto TP (`SL_MIN_PIPS` / `TP_ENFORCE_PIPS`); stack mode `reduce` (lot cut).
+
+### 3.2 Lot sizing — `core/risk.py :: calculate_lot`
+
+Zero lot if: no account, no free margin/equity, no symbol, zero tick, zero SL distance, insufficient margin for `MIN_LOT`.
+
+### 3.3 Strategy pre-guards — `core/strategy.py :: scan_once`
+
+Live locked; session; connect; strategy daily DD vs equity %; existing open position on symbol; spread; insufficient candles; `_trend_allows` fail; RR vs `STRATEGY_MIN_RR`.  
+Skips often `record_guard_event("strategy", ...)`.
+
+### 3.4 Layer watcher extras — `core/layer_watcher.py`
+
+SL distance caps layers; external cancel if signal removed from `pending`; soft/hard expiry; L2 trigger beyond SL; **runway** `L2_MIN_RUNWAY_PIPS`; spread/market closed retry; unknown ticket → stop; L1 stack retry; L1 other guards fatal; L2+ skip layer.
+
+### 3.5 Soft-only (do not hard-block `/gold*`)
+
+`check_trend_alignment`, `check_fib_entry` — warn UI; **fail-open** if candle data missing.
+
+### 3.6 Config present but not enforced in trade path
+
+| Item | Notes |
+|------|-------|
+| `SOURCE_CONFLICT_MODE` | Dashboard display only |
+| `STRATEGY_PARTIAL_CLOSE_*` | No implementation |
+| `SL_WARN_MIN/MAX_PIPS` | Warn config; not execute_trade block |
+
+---
+
+## 4. NOTIFICATION INVENTORY
+
+| notification_type | cause | module | live sink |
+|-------------------|-------|--------|-----------|
+| BOT_LIVE | listener up | listener | YOUR_CHAT_ID |
+| SOURCE_RESOLVE_FAIL | cannot resolve chats | listener | YOUR_CHAT_ID |
+| SIGNAL_DRY_RUN | auto_execute=false | listener | YOUR_CHAT_ID |
+| SIGNAL_WATCHING | watcher/layer started | listener | YOUR_CHAT_ID |
+| AUTO_EXECUTED | trade success | watcher | YOUR_CHAT_ID |
+| SPREAD_RETRY | in zone, spread block | watcher | YOUR_CHAT_ID |
+| AUTO_BLOCKED | other execute_trade block | watcher | YOUR_CHAT_ID |
+| SIGNAL_EXPIRED | expiry | watcher/layer | YOUR_CHAT_ID |
+| PROFIT_LOCK | BE/TP tighten | watcher/layer | YOUR_CHAT_ID |
+| TRAILING_STOP | trail move | watcher/layer | YOUR_CHAT_ID |
+| LAYER_* | place/skip/BE/abort | layer_watcher | YOUR_CHAT_ID |
+| AUTOZONE_* | zone fire / DB fail / result | map_watcher | YOUR_CHAT_ID |
+| STRATEGY_EXECUTED | strategy fill | strategy | YOUR_CHAT_ID |
+| TREND_DIRECTION_CHANGE | H1/H4 change | trend_analyzer | YOUR_CHAT_ID |
+| FIB_ENTRY_ALERT | scanner zone | trend_analyzer | YOUR_CHAT_ID + buttons |
+| AGENT_STARTED / HEARTBEAT / AUTO | agent hours | agent | YOUR_CHAT_ID |
+| SIGNAL_CONFIRMATION | EXECUTE/SKIP UI | notifier.send_confirmation | (agent path; unused from listener) |
+| CLOSE_PLAN | setup failed / collect / early TP | notifier | buttons |
+| MANUAL_* / MAP_CMD / PROFIT / MC / TREND | commands | notifier | reply_text |
+
+**Backtest requirement:** intercept at a `NotificationProvider` — default collector must set `sent=False`.
+
+---
+
+## 5. STATE INVENTORY
+
+### In-memory
+
+| Store | Location | Contaminates live if shared? |
+|-------|----------|------------------------------|
+| `pending`, `pending_closes` | `core/state.py` | YES |
+| `_daily_loss` | `core/state.py` | YES (also incomplete — see gaps) |
+| `_last_direction`, fib alert maps | `trend_analyzer` | YES |
+| `layer_sessions` | `layer_watcher` | YES |
+| `LAST_DECISION` | `strategy` | YES |
+| MT5 connection flags | `mt5` | YES |
+
+### Durable
+
+| Store | Path / system | Live risk if reused in BT |
+|-------|---------------|---------------------------|
+| MySQL signals/trades/guards/zones/snr | Docker MySQL | HIGH |
+| `data/trades.json` | append log | HIGH |
+| `data/bot.pid`, service locks | files | MEDIUM |
+| Telethon `data/session*` | Telegram login | CRITICAL if touched |
+| `data/manual_trade_guard.json` | cooldown | MEDIUM |
+
+**Backtest isolation path (prepared):** `data/backtests/<run_id>/`
+
+---
+
+## 6. BACKTEST READINESS ASSESSMENT
+
+| Area | Rating | Notes |
+|------|--------|-------|
+| Market data | **NOT READY** | Live `copy_rates` / ticks only; `candles` DB table unused by runtime |
+| Clock | **NOT READY** (scaffold exists) | Widespread `time.time()` / `utcnow` / MYT `now` |
+| Strategy engine | **PARTIALLY READY** | Pure `evaluate_breakout_retest`; signal/watcher paths not pure |
+| State | **NOT READY** | Globals + MySQL; isolation folder only scaffolded |
+| Execution | **NOT READY** | Direct `order_send`; need SimulatedExecution |
+| Notification | **NOT READY** | Direct Bot API sends |
+| Trade management | **NOT READY** | Profit lock / trail / layers need sim policy |
+| Reporting | **NOT READY** | No funnel/journal yet |
+| Safety gate | **PARTIALLY READY** | `backtest/safety.py` + RUN_MODE (not wired into bot) |
+
+---
+
+## 7. IDENTIFIED GAPS (ranked)
+
+### CRITICAL
+
+1. No historical replay loop; execution assumes live MT5 account + ticks.  
+2. Lot/risk depends on live free margin — not reproducible from OHLC alone.  
+3. Daily loss breaker is **process memory**, mainly updated by **dashboard poller** — bot-alone hist sim would mis-model it.  
+4. Agent auto-exec path documented ≠ wired.
+
+### HIGH
+
+5. Wall-clock `SIGNAL_EXPIRY` + session filter — need ReplayClock injection.  
+6. Watchers poll live price — need bar/tick replay model.  
+7. Fib/trend **fail-open** without MT5 — silent guard bypass in broken feeds.  
+8. Layer/stack/source risk need simulated open-position book.  
+9. Dual profit-lock (watcher vs poller) — pick one semantics for sim.
+
+### MEDIUM
+
+10. AutoZone zones are **manual**, not detected SND — 12-month AutoZone replay needs zone generation policy.  
+11. “Fib” is last opposite H1 candle 0–38.2%, not classic swing Fib lifecycle.  
+12. Dead config: `SOURCE_CONFLICT_MODE`, `STRATEGY_PARTIAL_CLOSE_*`.  
+13. Intrabar SL+TP ambiguity undefined.
+
+### LOW
+
+14. Telegram UI / Telethon not needed for pure strategy replay.  
+15. Startup AutoTrading / account-switch env coupling.
+
+---
+
+## 8. PROPOSED BACKTEST ARCHITECTURE
+
+```
+Historical XAUUSD OHLC (prefer same broker MT5 history)
+        ↓
+HistoricalReplayProvider  (MarketDataProvider)
+        ↓
+ReplayClock.advance_to(bar_time)   # no look-ahead
+        ↓
+Timeframe sync (M15/H1/H4 closed bars only as production uses)
+        ↓
+Analysis adapters (reuse pure functions where possible)
+  - trend_analyzer.calculate_ema/rsi/detect_structure (extract if needed)
+  - strategy.evaluate_breakout_retest
+  - OPTIONAL later: signal-watcher replay from recorded Telegram corpus
+        ↓
+Guard evaluator (shared checklist mirroring execute_trade order)
+        ↓
+SimulatedExecution  (NEVER order_send)
+        ↓
+ReplayNotificationCollector (NEVER Bot API)
+        ↓
+EventJournal JSONL + DecisionTrace
+        ↓
+data/backtests/<run_id>/{events,guards,trades,notifications,report}.jsonl
+        ↓
+Reports: funnel, guard analytics, notification analytics, gaps, metrics
+```
+
+### Modules (scaffolded now)
+
+| Module | Status |
+|--------|--------|
+| `backtest/clock.py` | **Created** — LiveClock / ReplayClock |
+| `backtest/interfaces.py` | **Created** — Candle, provider protocols |
+| `backtest/safety.py` | **Created** — RUN_MODE fail-closed |
+| `backtest/README.md` | **Created** |
+| `data/backtests/` | **Created** isolation root |
+| market / execution / notify / journal / runner / reports | **Planned** |
+
+### Important product truth for planning
+
+Your eventual “Fib/SND/candidate” funnel **does not match current production 1:1**.  
+A trustworthy baseline must report **three funnels**:
+
+1. **Telegram signal funnel** (primary live path)  
+2. **Strategy M15 breakout-retest funnel** (if STRATEGY_ENABLED)  
+3. **AutoZone / Fib-alert funnel** (manual or alert-assisted)
+
+Do not invent classic Fib/SND stages that the code does not implement.
+
+---
+
+## 9. IMPLEMENTATION PLAN (safe phases)
+
+| Phase | Work | Live impact |
+|-------|------|-------------|
+| **A** | Clock protocol; gradually inject behind feature flag (default LiveClock) | None if default live |
+| **B** | MarketDataProvider; HistoricalReplayProvider reading MT5 `copy_rates_range` offline dump | None |
+| **C** | State isolation under `data/backtests/<run_id>` | None |
+| **D** | NotificationProvider + ExecutionProvider adapters; live wrappers keep current calls | None until swapped |
+| **E** | Replay runner CLI for strategy pure path first | None |
+| **F** | Trade sim (fill/SL/TP) + AMBIGUOUS_INTRABAR policy | None |
+| **G** | Event journal + decision traces + gap detector | None |
+| **H** | Reports (funnel, guards, notifications, metrics) | None |
+| **I** | Optional: recorded Telegram signal corpus replay through watchers | None |
+
+**Do not** start with a full rewrite of `execute_trade`. Prefer a **guard checklist function** extracted carefully later with golden tests against current behaviour.
+
+---
+
+## 10. FILES CHANGED (this task)
+
+| File | Change |
+|------|--------|
+| `docs/BACKTEST_READINESS_REPORT.md` | **This report** |
+| `backtest/__init__.py` | Package export |
+| `backtest/clock.py` | LiveClock / ReplayClock |
+| `backtest/interfaces.py` | Provider protocols |
+| `backtest/safety.py` | RUN_MODE fail-closed |
+| `backtest/README.md` | Package docs |
+| `data/backtests/README.md` | Isolation note |
+| `test_backtest_infra.py` | Clock + safety unit tests |
+
+**Not modified:** `bot.py`, `core/mt5.py`, `core/strategy.py`, watchers, notifier, Telegram, MT5 execution paths.
+
+---
+
+## 11. TEST RESULTS
+
+Command:
+
+```bash
+python -m pytest test_backtest_infra.py -v
+```
+
+Expected coverage:
+
+1. LiveClock returns timezone-aware now  
+2. ReplayClock deterministic  
+3. ReplayClock cannot move backwards (anti look-behind)  
+4. Safety gate blocks default LIVE  
+5. Safety gate allows RUN_MODE=BACKTEST  
+6. Live sinks rejected in backtest assertions  
+7. Identical cursors → identical timestamps  
+
+---
+
+## 12. LIVE BEHAVIOUR CONFIRMATION
+
+| Item | Status |
+|------|--------|
+| Trading rules changed | **NO** |
+| Fib / trend / guards changed | **NO** |
+| MT5 production execution changed | **NO** |
+| Telegram production behaviour changed | **NO** |
+| `bot.py` imports `backtest` | **NO** |
+| LIVE strategy behaviour changed | **NO** |
+
+---
+
+## Appendix A — Timeframe / candle usage (production)
+
+| Component | Timeframe | Forming vs closed |
+|-----------|-----------|-------------------|
+| Strategy breakout | M15 | Uses `candles[:-1]` closed; last bar treated carefully in `evaluate_breakout_retest` |
+| Trend / Fib | H1 (Fib), H1+H4 (trend) | `copy_rates_from_pos` — typically includes current forming bar; Fib uses completed opposite candle logic inside `check_fib_entry` |
+| Signal watcher | Tick | Live bid/ask, not closed H1 |
+| Session filter | Wall UTC hour | Not bar-based |
+
+**Inconsistency to document in replay:** signal entries are **tick/proximity** driven; strategy is **closed M15** driven. Replay must not mix these models silently.
+
+## Appendix B — Look-ahead policy (required later)
+
+For any future swing-with-right-confirmation:
+
+- If `SWING_RIGHT = N`, pivot becomes visible only after N bars exist **at or before ReplayClock.cursor**.  
+- Strategy today does **not** use left/right swing pivots for Fib anchors — do not add look-ahead by inventing that feature in the backtester.
+
+## Appendix C — Suggested run id format
+
+```
+BT_XAUUSD_<FROM>_<TO>_<NNN>
+```
+
+Store `meta.json`: symbol, broker/server (no secrets), date range, git commit, branch, config snapshot hash, data source, started/completed.
+
+## Appendix D — Intrabar ambiguity policy (draft)
+
+When a simulated bar’s range touches both SL and TP:
+
+1. Mark event `AMBIGUOUS_INTRABAR`  
+2. Do **not** silently pick the profitable outcome  
+3. Future resolution options: M1/M5 replay, tick replay, or conservative (SL first) — choose explicitly in run meta
+
+---
+
+*End of report.*

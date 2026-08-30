@@ -1,0 +1,16 @@
+# SignalBot — Laragon front controller
+# Traffic → index.php → Flask on :5000 (same browser URL, no redirect)
+
+Options -Indexes
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^index\.php$ - [L]
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteRule . index.php [L]
+</IfModule>
+
+<FilesMatch "(?i)^(\.env|\.env\..*|.*\.py|.*\.ps1|.*\.bat|requirements\.txt|docker-compose\.yml)$">
+    Require all denied
+</FilesMatch>

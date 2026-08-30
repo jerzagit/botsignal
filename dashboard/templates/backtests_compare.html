@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}SignalBot — Compare Backtests{% endblock %}
+{% set active_nav = 'backtests' %}
+
+{% block content %}
+  <div class="page-header">
+    <h1>Compare Backtests</h1>
+    <p>Analytical comparison only — no trading recommendations.</p>
+  </div>
+
+  <form method="get" class="card" style="padding:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:end;">
+    <div style="flex:1;min-width:200px;">
+      <label class="form-label">Run A</label>
+      <select name="a" class="form-control">
+        <option value="">Select…</option>
+        {% for r in runs %}
+        <option value="{{ r.run_id }}" {% if a_id == r.run_id %}selected{% endif %}>{{ r.run_id }} ({{ r.strategy }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="flex:1;min-width:200px;">
+      <label class="form-label">Run B</label>
+      <select name="b" class="form-control">
+        <option value="">Select…</option>
+        {% for r in runs %}
+        <option value="{{ r.run_id }}" {% if b_id == r.run_id %}selected{% endif %}>{{ r.run_id }} ({{ r.strategy }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button class="btn btn-primary" type="submit">Compare</button>
+  </form>
+
+  {% if comparison %}
+  <div class="card" style="padding:0;margin-top:14px;overflow:auto;">
+    <table class="data-table" style="width:100%;border-collapse:collapse;">
+      <thead>
+        <tr>
+          <th style="padding:10px;text-align:left;">Metric</th>
+          <th style="padding:10px;text-align:right;">{{ comparison.a }}</th>
+          <th style="padding:10px;text-align:right;">{{ comparison.b }}</th>
+          <th style="padding:10px;text-align:right;">Diff (B−A)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in comparison.rows %}
+        <tr>
+          <td style="padding:10px;">{{ row.metric }}</td>
+          <td style="padding:10px;text-align:right;">{{ row.a }}</td>
+          <td style="padding:10px;text-align:right;">{{ row.b }}</td>
+          <td style="padding:10px;text-align:right;">{{ row.diff }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+{% endblock %}

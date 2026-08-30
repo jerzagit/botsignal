@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}SignalBot — Backtests{% endblock %}
+{% set active_nav = 'backtests' %}
+
+{% block content %}
+  <div class="page-header">
+    <h1>Backtest Results</h1>
+    <p>Research funnel + performance. Missing fields show as —.</p>
+  </div>
+
+  <div class="alert" style="background:#F3F4F6;">{{ launch_note }}</div>
+
+  <form method="get" class="card" style="padding:14px;margin:14px 0;display:flex;flex-wrap:wrap;gap:10px;align-items:end;">
+    <div>
+      <label class="form-label">Strategy</label>
+      <select name="strategy" class="form-control">
+        <option value="">All</option>
+        {% for s in strategies %}
+        <option value="{{ s }}" {% if filter_strategy == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="form-label">Symbol</label>
+      <input class="form-control" name="symbol" value="{{ filter_symbol }}" placeholder="XAUUSD">
+    </div>
+    <div>
+      <label class="form-label">Run type</label>
+      <select name="run_type" class="form-control">
+        <option value="">All</option>
+        <option value="strategy_backtest" {% if filter_run_type == 'strategy_backtest' %}selected{% endif %}>Strategy backtest</option>
+        <option value="diagnostic" {% if filter_run_type == 'diagnostic' %}selected{% endif %}>Diagnostic</option>
+        <option value="geometry_diagnostic" {% if filter_run_type == 'geometry_diagnostic' %}selected{% endif %}>Geometry diagnostic</option>
+        <option value="regression" {% if filter_run_type == 'regression' %}selected{% endif %}>Regression</option>
+      </select>
+    </div>
+    <button class="btn btn-secondary" type="submit">Filter</button>
+    <a class="btn btn-secondary" href="{{ base_path }}/backtests/compare">Compare runs</a>
+  </form>
+
+  <div class="card" style="padding:0;overflow:auto;">
+    <table class="data-table" style="width:100%;border-collapse:collapse;font-size:.8rem;">
+      <thead>
+        <tr>
+          <th>Run ID</th>
+          <th>Strategy</th>
+          <th>Type</th>
+          <th>Dataset</th>
+          <th>Zones</th>
+          <th>Retests</th>
+          <th>Conf</th>
+          <th>Cands</th>
+          <th>RR≥1.4</th>
+          <th>Exec</th>
+          <th>Trades</th>
+          <th>Win%</th>
+          <th>Net P/L</th>
+          <th>PF</th>
+          <th>Max DD%</th>
+          <th>Conf</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in runs %}
+        <tr>
+          <td><a href="{{ base_path }}/backtests/{{ r.run_id }}">{{ r.run_id }}</a></td>
+          <td>{{ r.strategy }}</td>
+          <td>{{ r.run_type or '—' }}</td>
+          <td>{{ r.dataset_id }}</td>
+          <td>{{ r.valid_zones|fmt_metric }}</td>
+          <td>{{ r.first_retests|fmt_metric }}</td>
+          <td>{{ r.confirmations|fmt_metric }}</td>
+          <td>{{ r.candidates|fmt_metric }}</td>
+          <td>{{ r.rr_pass|fmt_metric }}</td>
+          <td>{{ r.would_execute|fmt_metric }}</td>
+          <td>{{ r.trades_display|fmt_metric('int') }}</td>
+          <td>{{ r.trades|fmt_win_rate(r.win_rate_pct) }}</td>
+          <td>{{ r.net_pnl|fmt_metric('money') }}</td>
+          <td>{{ r.trades|fmt_profit_factor(r.profit_factor) }}</td>
+          <td>{{ r.max_drawdown_pct|fmt_metric('pct') }}</td>
+          <td>{{ r.confidence|fmt_metric }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="16" style="padding:16px;" class="text-muted">No backtest runs found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock %}

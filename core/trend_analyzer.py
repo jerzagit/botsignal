@@ -105,22 +105,20 @@ def detect_structure(highs: list[float], lows: list[float], lookback: int = 3) -
 
 # ── Per-timeframe analysis ────────────────────────────────────────────────────
 
-def analyze_timeframe(symbol: str, tf_const: int) -> dict | None:
+def analyze_candles(
+    closes: list[float],
+    highs: list[float],
+    lows: list[float],
+) -> dict | None:
     """
-    Fetch candles and run all 3 indicators for one timeframe.
-    Returns dict with ema/rsi/structure/overall directions, or None on error.
-    MT5 must be connected before calling this.
+    Pure trend analysis from OHLC series (no MT5 I/O).
+    Same voting rules as analyze_timeframe().
     """
-    symbol_mt5 = symbol + MT5_SYMBOL_SUFFIX
-    rates = mt5.copy_rates_from_pos(symbol_mt5, tf_const, 0, 100)
-    if rates is None or len(rates) < TREND_EMA_LONG + 5:
+    if len(closes) < TREND_EMA_LONG + 5:
+        return None
+    if len(highs) != len(closes) or len(lows) != len(closes):
         return None
 
-    closes = [r[4] for r in rates]  # close price
-    highs = [r[2] for r in rates]   # high
-    lows = [r[3] for r in rates]    # low
-
-    # EMA crossover
     ema_short = calculate_ema(closes, TREND_EMA_SHORT)
     ema_long = calculate_ema(closes, TREND_EMA_LONG)
     if ema_short and ema_long:
@@ -128,7 +126,6 @@ def analyze_timeframe(symbol: str, tf_const: int) -> dict | None:
     else:
         ema_dir = "NEUTRAL"
 
-    # RSI
     rsi_val = calculate_rsi(closes, TREND_RSI_PERIOD)
     if rsi_val > 55:
         rsi_dir = "BULL"
@@ -137,10 +134,8 @@ def analyze_timeframe(symbol: str, tf_const: int) -> dict | None:
     else:
         rsi_dir = "NEUTRAL"
 
-    # Structure
     struct_dir = detect_structure(highs, lows, lookback=3)
 
-    # Overall — 2/3 agree
     votes = [ema_dir, rsi_dir, struct_dir]
     bull_count = votes.count("BULL")
     bear_count = votes.count("BEAR")
@@ -158,6 +153,23 @@ def analyze_timeframe(symbol: str, tf_const: int) -> dict | None:
         "structure": struct_dir,
         "overall": overall,
     }
+
+
+def analyze_timeframe(symbol: str, tf_const: int) -> dict | None:
+    """
+    Fetch candles and run all 3 indicators for one timeframe.
+    Returns dict with ema/rsi/structure/overall directions, or None on error.
+    MT5 must be connected before calling this.
+    """
+    symbol_mt5 = symbol + MT5_SYMBOL_SUFFIX
+    rates = mt5.copy_rates_from_pos(symbol_mt5, tf_const, 0, 100)
+    if rates is None or len(rates) < TREND_EMA_LONG + 5:
+        return None
+
+    closes = [float(r[4]) for r in rates]
+    highs = [float(r[2]) for r in rates]
+    lows = [float(r[3]) for r in rates]
+    return analyze_candles(closes, highs, lows)
 
 
 def check_trend_alignment(direction: str, symbol: str = None) -> dict:
