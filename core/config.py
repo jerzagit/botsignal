@@ -85,8 +85,25 @@ if not SIGNAL_SOURCES:
     ]
 
 # ── Environment mode ──────────────────────────────────────────────────────────
+# demo | live (live1) | live2 | live3 — selects which MT5 credential block to use
 ENV_MODE = os.getenv("ENV_MODE", "demo").lower()
-_P = "LIVE_" if ENV_MODE == "live" else "DEMO_"
+if ENV_MODE == "live1":
+    ENV_MODE = "live"
+
+
+def _mt5_env_prefix(mode: str) -> str:
+    mode = (mode or "demo").lower()
+    if mode in {"live", "live1"}:
+        return "LIVE_"
+    if mode == "live2":
+        return "LIVE2_"
+    if mode == "live3":
+        return "LIVE3_"
+    return "DEMO_"
+
+
+_P = _mt5_env_prefix(ENV_MODE)
+IS_LIVE_MODE = _P.startswith("LIVE")
 
 # ── MT5 account (selected by ENV_MODE) ───────────────────────────────────────
 MT5_PATH          = os.getenv("MT5_PATH", "")
@@ -271,6 +288,9 @@ AGENT_AUTO_EXECUTE  = os.getenv("AGENT_AUTO_EXECUTE", "false").lower() == "true"
 AGENT_LIVE_UNLOCKED = os.getenv("AGENT_LIVE_UNLOCKED", "false").lower() == "true"
 
 # Low-risk full-auto strategy mode. Runs beside the Telegram signal bot.
+# ACTIVE_STRATEGY selects a registered plugin (default preserves breakout-retest V1).
+# Alias "breakout_retest" resolves to "breakout_retest_v1" via the strategy registry.
+ACTIVE_STRATEGY        = os.getenv("ACTIVE_STRATEGY", "breakout_retest_v1").strip() or "breakout_retest_v1"
 STRATEGY_ENABLED       = os.getenv("STRATEGY_ENABLED", "false").lower() == "true"
 STRATEGY_SYMBOL        = os.getenv("STRATEGY_SYMBOL", "XAUUSD").upper()
 STRATEGY_TIMEFRAME     = os.getenv("STRATEGY_TIMEFRAME", "M15").upper()

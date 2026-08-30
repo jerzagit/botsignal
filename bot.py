@@ -21,6 +21,7 @@ from core.config import (  # noqa: E402
     AGENT_LIVE_UNLOCKED,
     AGENT_AUTO_EXECUTE,
     ENV_MODE,
+    IS_LIVE_MODE,
     FIB_SCANNER_ENABLED,
     MAP_ENABLED,
     MT5_STARTUP_TIMEOUT_SECS,
@@ -194,7 +195,7 @@ def reset_startup_cooldown():
 
 
 def _service_enabled(name: str, enabled: bool, live_unlocked: bool | None = None) -> bool:
-    if live_unlocked is None or ENV_MODE != "live":
+    if live_unlocked is None or not IS_LIVE_MODE:
         log.info("Service %-12s %s", name, "enabled" if enabled else "disabled")
         return enabled
 

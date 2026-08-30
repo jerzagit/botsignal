@@ -1,8 +1,10 @@
 """
-Low-risk full-auto XAUUSD strategy engine.
+Low-risk full-auto XAUUSD strategy orchestrator.
 
-Runs beside the Telegram signal flow. It scans for M15 breakout-retest setups
-aligned with H1/H4 direction and executes through the existing MT5 pipeline.
+Loads market data, builds MarketContext, calls the active strategy plugin,
+then applies the SAME pre-guards / execute_trade path as before.
+
+Decision algorithms live under core/strategies/ — not in this file.
 """
 
 from __future__ import annotations
@@ -11,28 +13,50 @@ import asyncio
 import logging
 import time
 import uuid
-from dataclasses import dataclass
 from typing import Iterable
 
 import MetaTrader5 as mt5
 
 from core.config import (
-    ENV_MODE, YOUR_CHAT_ID, MT5_SYMBOL_SUFFIX, SL_PIP_SIZE,
-    MAX_SPREAD_PIPS, SESSION_FILTER_ENABLED, SESSION_START_HOUR_UTC,
-    SESSION_END_HOUR_UTC, STRATEGY_ENABLED, STRATEGY_SYMBOL,
-    STRATEGY_TIMEFRAME, STRATEGY_SCAN_INTERVAL, STRATEGY_RISK_PERCENT,
-    STRATEGY_DAILY_DRAWDOWN_PERCENT, STRATEGY_LIVE_UNLOCKED,
-    STRATEGY_MIN_RR, STRATEGY_BREAKOUT_LOOKBACK,
-    STRATEGY_RETEST_TOLERANCE_PIPS, STRATEGY_CONFIRM_BODY_RATIO,
-    STRATEGY_SWING_BUFFER_PIPS, STRATEGY_TP_R_MULTIPLE,
+    ACTIVE_STRATEGY,
+    IS_LIVE_MODE,
+    YOUR_CHAT_ID,
+    MT5_SYMBOL_SUFFIX,
+    SL_PIP_SIZE,
+    MAX_SPREAD_PIPS,
+    SESSION_FILTER_ENABLED,
+    SESSION_START_HOUR_UTC,
+    SESSION_END_HOUR_UTC,
+    STRATEGY_ENABLED,
+    STRATEGY_SYMBOL,
+    STRATEGY_TIMEFRAME,
+    STRATEGY_SCAN_INTERVAL,
+    STRATEGY_RISK_PERCENT,
+    STRATEGY_DAILY_DRAWDOWN_PERCENT,
+    STRATEGY_LIVE_UNLOCKED,
+    STRATEGY_BREAKOUT_LOOKBACK,
 )
 from core.db import record_guard_event, upsert_signal
 from core.mt5 import execute_trade, mt5_connect
 from core.signal import Signal
 from core.state import get_daily_loss
+from core.strategies.base import MarketContext, StrategyDecision, build_market_context
+from core.strategies.breakout_retest_v1 import evaluate_breakout_retest  # noqa: F401 — compat re-export
+from core.strategies.registry import get_strategy, resolve_strategy_name
 from core.trend_analyzer import analyze_timeframe
 
 log = logging.getLogger(__name__)
+
+# Backward-compatible re-exports (single V1 implementation lives in strategies/).
+__all__ = [
+    "StrategyDecision",
+    "MarketContext",
+    "evaluate_breakout_retest",
+    "scan_once",
+    "start_strategy",
+    "get_strategy_status",
+    "LAST_DECISION",
+]
 
 TIMEFRAME_MAP = {
     "M1": mt5.TIMEFRAME_M1,
@@ -40,6 +64,8 @@ TIMEFRAME_MAP = {
     "M15": mt5.TIMEFRAME_M15,
     "M30": mt5.TIMEFRAME_M30,
     "H1": mt5.TIMEFRAME_H1,
+    "H4": mt5.TIMEFRAME_H4,
+    "D1": mt5.TIMEFRAME_D1,
 }
 
 LAST_DECISION = {
@@ -50,17 +76,6 @@ LAST_DECISION = {
     "direction": None,
     "price": None,
 }
-
-
-@dataclass(frozen=True)
-class StrategyDecision:
-    action: str
-    reason: str
-    direction: str | None = None
-    entry: float | None = None
-    sl: float | None = None
-    tp: float | None = None
-    level: float | None = None
 
 
 def _symbol_mt5(symbol: str) -> str:
@@ -80,13 +95,6 @@ def _as_candle_dicts(rates: Iterable) -> list[dict]:
     return candles
 
 
-def _body_ratio(candle: dict) -> float:
-    rng = candle["high"] - candle["low"]
-    if rng <= 0:
-        return 0.0
-    return abs(candle["close"] - candle["open"]) / rng
-
-
 def _session_ok() -> bool:
     if not SESSION_FILTER_ENABLED:
         return True
@@ -94,75 +102,6 @@ def _session_ok() -> bool:
     if SESSION_START_HOUR_UTC <= SESSION_END_HOUR_UTC:
         return SESSION_START_HOUR_UTC <= hour < SESSION_END_HOUR_UTC
     return hour >= SESSION_START_HOUR_UTC or hour < SESSION_END_HOUR_UTC
-
-
-def _trend_allows(direction: str, h1: str, h4: str) -> bool:
-    opposing = "BEAR" if direction == "buy" else "BULL"
-    return h1 != opposing and h4 != opposing
-
-
-def evaluate_breakout_retest(
-    candles: list[dict],
-    h1_direction: str,
-    h4_direction: str,
-    bid: float,
-    ask: float,
-) -> StrategyDecision:
-    """Pure strategy decision function, testable without MT5."""
-    lookback = STRATEGY_BREAKOUT_LOOKBACK
-    if len(candles) < lookback + 3:
-        return StrategyDecision("wait", "Not enough M15 candles.")
-
-    closed = candles[:-1]
-    breakout = closed[-2]
-    confirm = closed[-1]
-    prior = closed[-(lookback + 2):-2]
-
-    prev_high = max(c["high"] for c in prior)
-    prev_low = min(c["low"] for c in prior)
-    tolerance = STRATEGY_RETEST_TOLERANCE_PIPS * SL_PIP_SIZE
-    buffer = STRATEGY_SWING_BUFFER_PIPS * SL_PIP_SIZE
-
-    bull_break = (
-        breakout["close"] > prev_high
-        and _body_ratio(breakout) >= STRATEGY_CONFIRM_BODY_RATIO
-    )
-    bear_break = (
-        breakout["close"] < prev_low
-        and _body_ratio(breakout) >= STRATEGY_CONFIRM_BODY_RATIO
-    )
-
-    if bull_break:
-        retested = confirm["low"] <= prev_high + tolerance
-        rejected = confirm["close"] > prev_high and confirm["close"] > confirm["open"]
-        if retested and rejected:
-            if not _trend_allows("buy", h1_direction, h4_direction):
-                return StrategyDecision("skip", f"Trend blocks BUY: H1={h1_direction}, H4={h4_direction}.")
-            entry = ask
-            sl = round(min(confirm["low"], breakout["low"]) - buffer, 2)
-            risk = entry - sl
-            tp = round(entry + risk * STRATEGY_TP_R_MULTIPLE, 2)
-            rr = (tp - entry) / risk if risk > 0 else 0
-            if risk <= 0 or rr < STRATEGY_MIN_RR:
-                return StrategyDecision("skip", f"Invalid BUY risk math: RR={rr:.2f}.")
-            return StrategyDecision("enter", "Bullish breakout-retest confirmed.", "buy", entry, sl, tp, prev_high)
-
-    if bear_break:
-        retested = confirm["high"] >= prev_low - tolerance
-        rejected = confirm["close"] < prev_low and confirm["close"] < confirm["open"]
-        if retested and rejected:
-            if not _trend_allows("sell", h1_direction, h4_direction):
-                return StrategyDecision("skip", f"Trend blocks SELL: H1={h1_direction}, H4={h4_direction}.")
-            entry = bid
-            sl = round(max(confirm["high"], breakout["high"]) + buffer, 2)
-            risk = sl - entry
-            tp = round(entry - risk * STRATEGY_TP_R_MULTIPLE, 2)
-            rr = (entry - tp) / risk if risk > 0 else 0
-            if risk <= 0 or rr < STRATEGY_MIN_RR:
-                return StrategyDecision("skip", f"Invalid SELL risk math: RR={rr:.2f}.")
-            return StrategyDecision("enter", "Bearish breakout-retest confirmed.", "sell", entry, sl, tp, prev_low)
-
-    return StrategyDecision("wait", "No breakout-retest confirmation.")
 
 
 def _remember(decision: StrategyDecision, symbol: str, price: float | None = None):
@@ -177,12 +116,14 @@ def _remember(decision: StrategyDecision, symbol: str, price: float | None = Non
         "sl": decision.sl,
         "tp": decision.tp,
         "level": decision.level,
+        "strategy": resolve_strategy_name(ACTIVE_STRATEGY),
     })
 
 
 def get_strategy_status() -> dict:
     return {
         "enabled": STRATEGY_ENABLED,
+        "active_strategy": resolve_strategy_name(ACTIVE_STRATEGY),
         "symbol": STRATEGY_SYMBOL,
         "timeframe": STRATEGY_TIMEFRAME,
         "risk_percent": STRATEGY_RISK_PERCENT,
@@ -196,8 +137,10 @@ def scan_once() -> str:
     """Run one strategy scan and maybe execute one trade."""
     symbol = STRATEGY_SYMBOL
     symbol_mt5 = _symbol_mt5(symbol)
+    strategy_name = resolve_strategy_name(ACTIVE_STRATEGY)
+    plugin = get_strategy(strategy_name)
 
-    if ENV_MODE == "live" and not STRATEGY_LIVE_UNLOCKED:
+    if IS_LIVE_MODE and not STRATEGY_LIVE_UNLOCKED:
         decision = StrategyDecision("skip", "Live mode is locked for strategy auto-trading.")
         _remember(decision, symbol)
         return decision.reason
@@ -248,24 +191,37 @@ def scan_once() -> str:
         _remember(decision, symbol, mid)
         return decision.reason
 
-    tf = TIMEFRAME_MAP.get(STRATEGY_TIMEFRAME, mt5.TIMEFRAME_M15)
-    rates = mt5.copy_rates_from_pos(symbol_mt5, tf, 0, STRATEGY_BREAKOUT_LOOKBACK + 5)
+    required = tuple(getattr(plugin, "required_timeframes", ("M15", "H1", "H4")))
+    candle_map: dict = {}
+    lookback = max(STRATEGY_BREAKOUT_LOOKBACK + 5, 80)
+    for tf_name in required:
+        tf_const = TIMEFRAME_MAP.get(tf_name)
+        if tf_const is None:
+            continue
+        rates_tf = mt5.copy_rates_from_pos(symbol_mt5, tf_const, 0, lookback)
+        if rates_tf is not None:
+            candle_map[tf_name] = _as_candle_dicts(rates_tf)
+
     h1 = analyze_timeframe(symbol, mt5.TIMEFRAME_H1)
     h4 = analyze_timeframe(symbol, mt5.TIMEFRAME_H4)
     mt5.shutdown()
 
-    if rates is None or h1 is None or h4 is None:
+    if "M15" not in candle_map or h1 is None or h4 is None:
         decision = StrategyDecision("wait", "Not enough candle/trend data.")
         _remember(decision, symbol, mid)
         return decision.reason
 
-    decision = evaluate_breakout_retest(
-        _as_candle_dicts(rates),
-        h1.get("overall", "NEUTRAL"),
-        h4.get("overall", "NEUTRAL"),
-        tick.bid,
-        tick.ask,
+    context = build_market_context(
+        symbol=symbol,
+        timestamp=None,
+        candles=candle_map,
+        h1_direction=h1.get("overall", "NEUTRAL"),
+        h4_direction=h4.get("overall", "NEUTRAL"),
+        bid=tick.bid,
+        ask=tick.ask,
+        spread_pips=spread_pips,
     )
+    decision = plugin.evaluate(context)
     _remember(decision, symbol, mid)
 
     if decision.action != "enter":
@@ -305,9 +261,10 @@ async def start_strategy(bot):
         log.info("Strategy mode disabled (STRATEGY_ENABLED=false)")
         return
 
+    strategy_name = resolve_strategy_name(ACTIVE_STRATEGY)
     log.info(
-        "Strategy mode started: %s %s risk=%.2f%%",
-        STRATEGY_SYMBOL, STRATEGY_TIMEFRAME, STRATEGY_RISK_PERCENT * 100,
+        "Strategy mode started: plugin=%s %s %s risk=%.2f%%",
+        strategy_name, STRATEGY_SYMBOL, STRATEGY_TIMEFRAME, STRATEGY_RISK_PERCENT * 100,
     )
 
     while True:

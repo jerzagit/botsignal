@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SignalBot — Sign in</title>
+  <link rel="stylesheet" href="{{ base_path }}/static/css/portal.css">
+</head>
+<body class="auth-page">
+  <div style="width:min(1080px,100%); position:relative; z-index:1;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:28px;">
+      <div class="brand-mark" style="width:36px;height:36px;border-radius:10px;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>
+      </div>
+      <div>
+        <div class="brand-name" style="font-size:.95rem;">SIGNAL<span>BOT</span></div>
+        <div class="brand-tag">Trading Intelligence</div>
+      </div>
+    </div>
+
+    <div class="auth-shell">
+      <section class="auth-marketing">
+        <div class="badge locked">XAUUSD</div>
+        <p style="margin-top:10px;font-size:.8rem;letter-spacing:.08em;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Precious metals. Premium analysis.</p>
+        <h1><em>Trade</em> Smarter.<br><em>Execute</em> Better.</h1>
+        <p>Monitor signals, protect capital, and operate your XAUUSD automation from one premium trading portal.</p>
+      </section>
+
+      <form class="auth-card" method="post" action="{{ base_path }}/login" autocomplete="username">
+        <div class="auth-card-logo">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="26" height="26"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>
+        </div>
+        <h2>Welcome Back</h2>
+        <p class="sub">Sign in to your SignalBot Portal.</p>
+        {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+        <label class="form-label" for="username">Username</label>
+        <input id="username" name="username" class="form-control" autocomplete="username" required autofocus>
+
+        <div style="height:14px"></div>
+        <label class="form-label" for="password">Password</label>
+        <input id="password" name="password" type="password" class="form-control" autocomplete="current-password" required>
+
+        <button class="btn btn-primary" type="submit" style="width:100%;margin-top:20px;">Sign in →</button>
+      </form>
+    </div>
+
+    <div class="auth-features">
+      <div class="auth-feature">
+        <strong>Real-time Signals</strong>
+        <span>Live market opportunities</span>
+      </div>
+      <div class="auth-feature">
+        <strong>Risk Management</strong>
+        <span>Protect your capital</span>
+      </div>
+      <div class="auth-feature">
+        <strong>Performance Analytics</strong>
+        <span>Track and improve</span>
+      </div>
+      <div class="auth-feature">
+        <strong>24/7 Monitoring</strong>
+        <span>Always watching the markets</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -15,6 +15,7 @@ from core.config import (
     AGENT_LIVE_UNLOCKED,
     AGENT_START_HOUR_MY,
     ENV_MODE,
+    IS_LIVE_MODE,
     YOUR_CHAT_ID,
 )
 from core.mt5 import execute_trade
@@ -49,7 +50,7 @@ def session_name() -> str:
 
 
 def _live_auto_locked() -> bool:
-    return ENV_MODE == "live" and AGENT_AUTO_EXECUTE and not AGENT_LIVE_UNLOCKED
+    return IS_LIVE_MODE and AGENT_AUTO_EXECUTE and not AGENT_LIVE_UNLOCKED
 
 
 async def agent_handle_signal(signal: Signal, signal_id: str):

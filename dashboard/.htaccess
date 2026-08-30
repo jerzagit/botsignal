@@ -1,0 +1,2 @@
+# Flask serves this app — do not expose Python source via Apache
+Require all denied

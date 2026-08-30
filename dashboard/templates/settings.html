@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}SignalBot — Settings{% endblock %}
+{% set active_nav = 'settings' %}
+
+{% block content %}
+  <div class="page-header">
+    <h1>Configuration</h1>
+    <p>Edits write to <code>.env</code>. Restart bot/dashboard for all changes to take effect.</p>
+  </div>
+
+  {% if message %}<div class="alert alert-success">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+  {% if request.args.get('restart_ok') %}<div class="alert alert-success">SignalBot Python service restart requested.</div>{% endif %}
+  {% if request.args.get('restart_error') %}<div class="alert alert-error">SignalBot restart failed or was cancelled.</div>{% endif %}
+
+  <div class="card" style="padding:16px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;">
+    <div>
+      <div style="font-weight:600;">Restart Python service (SignalBot)</div>
+      <p class="text-muted" style="margin:4px 0 0;font-size:.9rem;">
+        Restarts <code>bot.py</code> only. Does not close MT5 or this dashboard.
+      </p>
+    </div>
+    <form method="post" action="{{ base_path }}/system/restart-bot"
+          onsubmit="return confirm('Restart SignalBot Python service now?\n\nMT5 will NOT be closed.');">
+      <input type="hidden" name="confirm" value="restart">
+      <input type="hidden" name="next" value="/settings">
+      <button type="submit" class="btn btn-primary">Restart bot</button>
+    </form>
+  </div>
+
+  <div class="settings-layout">
+    <aside class="card settings-nav">
+      <div class="nav-section-label" style="padding-top:4px;">Sections</div>
+      {% for section in sections %}
+      <button type="button" class="nav-link" data-target="sec-{{ section.id }}">{{ section.title }}</button>
+      {% endfor %}
+    </aside>
+
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      {% for section in sections %}
+      <section id="sec-{{ section.id }}" class="card sec-card {% if open_section == section.id %}open{% endif %}">
+        <button type="button" class="sec-toggle" data-target="sec-{{ section.id }}">
+          <div>
+            <div style="font-size:1.05rem;font-weight:600;color:var(--text-title);">{{ section.title }}</div>
+            <div class="text-muted" style="font-size:.85rem;margin-top:4px;">{{ section.description }}</div>
+          </div>
+          <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+
+        <div class="sec-body" style="padding:0 20px 20px;">
+          <form method="post" action="{{ base_path }}/settings" autocomplete="off" style="padding-top:16px;">
+            <input type="hidden" name="section_id" value="{{ section.id }}">
+            <div class="grid-2">
+              {% for field in section.fields %}
+              {% set meta = values.get(field.key, {"value":"","placeholder":"","set":false}) %}
+              <div style="{% if field.type == 'text' %}grid-column:1 / -1;{% endif %}">
+                <label class="form-label" for="{{ field.key }}">{{ field.label }}</label>
+                {% if field.help %}<p class="form-help">{{ field.help }}</p>{% endif %}
+
+                {% if field.type == 'bool' %}
+                <select id="{{ field.key }}" name="{{ field.key }}" class="form-control">
+                  {% set cur = (meta.value|string)|lower %}
+                  <option value="true" {% if cur in ['1','true','yes','on'] %}selected{% endif %}>true</option>
+                  <option value="false" {% if cur not in ['1','true','yes','on'] %}selected{% endif %}>false</option>
+                </select>
+
+                {% elif field.type == 'select' and field.key == 'ENV_MODE' %}
+                <select id="{{ field.key }}" name="{{ field.key }}" class="form-control">
+                  {% set cur = (meta.value|string)|lower %}
+                  {% if cur == 'live1' %}{% set cur = 'live' %}{% endif %}
+                  {% for opt in runtime_options %}
+                  <option value="{{ opt.value }}" {% if cur == opt.value %}selected{% endif %}>{{ opt.label }}</option>
+                  {% endfor %}
+                </select>
+                <p class="form-help">Only accounts with a login filled appear here (demo + up to 3 live).</p>
+
+                {% elif field.type == 'text' %}
+                <textarea id="{{ field.key }}" name="{{ field.key }}" class="form-control font-mono"
+                  placeholder="{{ meta.placeholder }}">{{ meta.value }}</textarea>
+
+                {% elif field.type == 'password' %}
+                <input id="{{ field.key }}" name="{{ field.key }}" type="password" value=""
+                  class="form-control font-mono"
+                  placeholder="{{ meta.placeholder or '••••••••' }}"
+                  autocomplete="new-password">
+
+                {% else %}
+                <input id="{{ field.key }}" name="{{ field.key }}" type="text" value="{{ meta.value }}"
+                  class="form-control font-mono"
+                  placeholder="{{ meta.placeholder }}">
+                {% endif %}
+                <p class="form-help"><code>{{ field.key }}</code></p>
+              </div>
+              {% endfor %}
+            </div>
+
+            <div style="margin-top:18px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px;align-items:center;">
+              <p class="form-help" style="margin:0;">Secrets: leave blank to keep saved value.</p>
+              <button type="submit" class="btn btn-primary">Save {{ section.title }}</button>
+            </div>
+          </form>
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const OPEN_SECTION = {{ open_section|tojson }};
+
+  function setActiveNav(id) {
+    document.querySelectorAll('.settings-nav .nav-link').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.target === id);
+    });
+  }
+
+  function openSection(id, { scroll = true } = {}) {
+    const card = document.getElementById(id);
+    if (!card) return;
+    document.querySelectorAll('.sec-card').forEach(el => {
+      if (el.id !== id) el.classList.remove('open');
+    });
+    card.classList.add('open');
+    setActiveNav(id);
+    if (scroll) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    history.replaceState(null, '', '#' + id);
+  }
+
+  document.querySelectorAll('.settings-nav .nav-link').forEach(btn => {
+    btn.addEventListener('click', () => openSection(btn.dataset.target, { scroll: true }));
+  });
+
+  document.querySelectorAll('.sec-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.target;
+      const card = document.getElementById(id);
+      const willOpen = !card.classList.contains('open');
+      document.querySelectorAll('.sec-card').forEach(el => el.classList.remove('open'));
+      if (willOpen) openSection(id, { scroll: false });
+      else setActiveNav('');
+    });
+  });
+
+  window.addEventListener('DOMContentLoaded', () => {
+    if (OPEN_SECTION) {
+      openSection('sec-' + OPEN_SECTION, { scroll: true });
+      return;
+    }
+    const hash = (location.hash || '').replace(/^#/, '');
+    if (hash && document.getElementById(hash)) openSection(hash, { scroll: true });
+  });
+</script>
+{% endblock %}
