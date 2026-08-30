@@ -1,0 +1,340 @@
+{% extends "base.html" %}
+{% block title %}SignalBot — Backtest {{ detail.run_id if detail else run_id }}{% endblock %}
+{% set active_nav = 'backtests' %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+  {% if missing %}
+  <div class="alert alert-error">Run not found: {{ run_id }}</div>
+  <a href="{{ base_path }}/backtests">← Back</a>
+  {% else %}
+  <div class="page-header">
+    <h1>{{ detail.run_id }}</h1>
+    <p>{{ detail.strategy }} · {{ detail.dataset_id }} · {{ detail.from }} → {{ detail.to }}
+      {% if detail.research_summary %} · <span class="badge">{{ detail.research_summary.run_type }}</span>{% endif %}
+    </p>
+  </div>
+
+  {% if detail.research_summary %}
+  <div class="card" style="padding:16px;margin-bottom:14px;">
+    <h3>Research summary</h3>
+    <div class="stat-grid" style="grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;font-size:.85rem;">
+      <div><strong>Evaluations</strong><br>{{ detail.research_summary.evaluations|fmt_metric }}</div>
+      <div><strong>Valid zones</strong><br>{{ detail.research_summary.valid_zones|fmt_metric }}</div>
+      <div><strong>First retests</strong><br>{{ detail.research_summary.first_retests|fmt_metric }}</div>
+      <div><strong>Reaction pivots</strong><br>{{ detail.research_summary.reaction_pivots|fmt_metric }}</div>
+      <div><strong>Trigger pivots</strong><br>{{ detail.research_summary.local_trigger_pivots|fmt_metric }}</div>
+      <div><strong>Confirmations</strong><br>{{ detail.research_summary.confirmations|fmt_metric }}</div>
+      <div><strong>Candidates</strong><br>{{ detail.research_summary.candidates|fmt_metric }}</div>
+      <div><strong>RR pass</strong><br>{{ detail.research_summary.rr_pass|fmt_metric }}</div>
+      <div><strong>Would execute</strong><br>{{ detail.research_summary.would_execute|fmt_metric }}</div>
+      <div><strong>Trades</strong><br>{{ detail.research_summary.trades|fmt_metric('int') }}</div>
+      <div><strong>Decision hash</strong><br><small>{{ detail.hashes.decision_hash or '—' }}</small></div>
+    </div>
+  </div>
+
+  {% if detail.v2_funnel and detail.v2_funnel.stages %}
+  <div class="card" style="padding:16px;margin-bottom:14px;">
+    <h3>Strategy funnel</h3>
+    <ol style="font-size:.9rem;line-height:1.8;">
+      {% for s in detail.v2_funnel.stages %}
+        <li>{{ s.stage }}: <strong>{{ s.pass }}</strong> pass{% if s.input %} (of {{ s.input }}{% if s.pass_pct is not none %}, {{ s.pass_pct }}%{% endif %}){% endif %}</li>
+      {% endfor %}
+    </ol>
+  </div>
+  {% endif %}
+  {% endif %}
+
+  <div class="stat-grid">
+    <div class="card stat-card"><div class="stat-label">Net P/L</div><div class="stat-value">{{ detail.net_pnl|fmt_metric('money') }}</div></div>
+    <div class="card stat-card"><div class="stat-label">Win rate</div><div class="stat-value">{{ detail.trades|fmt_win_rate(detail.win_rate_pct) }}</div></div>
+    <div class="card stat-card"><div class="stat-label">Profit factor</div><div class="stat-value">{{ detail.trades|fmt_profit_factor(detail.profit_factor) }}</div></div>
+    <div class="card stat-card"><div class="stat-label">Max DD %</div><div class="stat-value">{{ detail.max_drawdown_pct|fmt_metric('pct') }}</div></div>
+  </div>
+
+  <div class="grid-2" style="margin-top:14px;">
+    <div class="card" style="padding:16px;">
+      <h3>Funnel</h3>
+      <pre style="white-space:pre-wrap;font-size:.85rem;">{{ detail.funnel }}</pre>
+      <h3>Guards</h3>
+      <pre style="white-space:pre-wrap;font-size:.85rem;">{{ detail.guard_funnel }}</pre>
+    </div>
+    <div class="card" style="padding:16px;">
+      <h3>Performance</h3>
+      <pre style="white-space:pre-wrap;font-size:.85rem;">{{ detail.performance }}</pre>
+      <h3>Hashes</h3>
+      <pre style="white-space:pre-wrap;font-size:.85rem;">{{ detail.hashes }}</pre>
+      <p class="text-muted">Fill: {{ detail.fill_policy }} · Engine: {{ detail.outcome_engine }} · Costs: {{ detail.cost_model }}</p>
+    </div>
+  </div>
+
+  <div class="grid-2" style="margin-top:14px;">
+    <div class="card" style="padding:16px;">
+      <h3>Equity curve</h3>
+      {% if detail.equity_curve %}
+      <canvas id="eqChart" height="120"></canvas>
+      {% else %}<p class="text-muted">N/A</p>{% endif %}
+    </div>
+    <div class="card" style="padding:16px;">
+      <h3>Monthly P/L</h3>
+      {% if detail.monthly %}
+      <canvas id="moChart" height="120"></canvas>
+      {% else %}<p class="text-muted">N/A</p>{% endif %}
+    </div>
+  </div>
+
+  {% if detail.has_v2_diagnostics %}
+  <div class="card" style="padding:16px;margin-top:14px;">
+    <h3>V2 Funnel</h3>
+    {% if detail.v2_funnel and detail.v2_funnel.stages %}
+    <table class="table" style="width:100%;font-size:.85rem;">
+      <thead><tr><th>Stage</th><th>Input</th><th>Pass</th><th>Fail</th><th>Pass %</th></tr></thead>
+      <tbody>
+      {% for s in detail.v2_funnel.stages %}
+        <tr>
+          <td>{{ s.stage }}</td>
+          <td>{{ s.input }}</td>
+          <td>{{ s.pass }}</td>
+          <td>{{ s.fail }}</td>
+          <td>{% if s.pass_pct is not none %}{{ s.pass_pct }}%{% else %}—{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-muted">v2_funnel.json missing or empty.</p>
+    {% endif %}
+  </div>
+
+  <div class="grid-2" style="margin-top:14px;">
+    <div class="card" style="padding:16px;">
+      <h3>Rejection reasons</h3>
+      {% set rej = (detail.v2_rejection_reasons.stage_rejects if detail.v2_rejection_reasons else {}) %}
+      {% if rej %}
+      <table class="table" style="width:100%;font-size:.85rem;">
+        <thead><tr><th>Reason</th><th>Count</th></tr></thead>
+        <tbody>
+        {% for k, v in rej|dictsort(by='value', reverse=true) %}
+          <tr><td>{{ k }}</td><td>{{ v }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p class="text-muted">No stage rejection tallies.</p>{% endif %}
+      {% if detail.v2_diagnostic_summary and detail.v2_diagnostic_summary.top_bottlenecks %}
+      <h4 style="margin-top:12px;">Top bottlenecks</h4>
+      <ol style="font-size:.85rem;">
+        {% for b in detail.v2_diagnostic_summary.top_bottlenecks %}
+        <li>{{ b }}</li>
+        {% endfor %}
+      </ol>
+      {% endif %}
+    </div>
+    <div class="card" style="padding:16px;">
+      <h3>Candidate geometry</h3>
+      {% set cands = (detail.v2_candidate_geometry.candidates if detail.v2_candidate_geometry else []) %}
+      {% if cands %}
+      <table class="table" style="width:100%;font-size:.8rem;">
+        <thead><tr><th>Dir</th><th>Entry</th><th>SL</th><th>TP</th><th>RR</th><th>Req</th><th>Guard</th></tr></thead>
+        <tbody>
+        {% for c in cands %}
+          <tr>
+            <td>{{ c.direction }}</td>
+            <td>{{ c.entry }}</td>
+            <td>{{ c.sl }}</td>
+            <td>{{ c.tp }}</td>
+            <td>{{ c.rr }}</td>
+            <td>{{ c.required_rr }}</td>
+            <td>{{ c.guard_result or c.first_block_reason or '—' }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p class="text-muted">No candidates.</p>{% endif %}
+    </div>
+  </div>
+
+  <div class="card" style="padding:16px;margin-top:14px;overflow:auto;">
+    <h3>Zone audit</h3>
+    {% if detail.v2_zone_audit %}
+    <table class="table" style="width:100%;font-size:.8rem;">
+      <thead>
+        <tr>
+          <th>Zone</th><th>Type</th><th>Created</th><th>Proximal</th><th>Distal</th>
+          <th>BOS</th><th>H4</th><th>H1</th><th>Fresh</th><th>Retest</th><th>Result</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for z in detail.v2_zone_audit %}
+        <tr>
+          <td title="{{ z.zone_id }}">{{ z.zone_id[-24:] }}</td>
+          <td>{{ z.zone_type }}</td>
+          <td>{{ z.zone_created_at }}</td>
+          <td>{{ z.proximal }}</td>
+          <td>{{ z.distal }}</td>
+          <td>{{ z.bos_level }}</td>
+          <td>{{ z.h4_bias_at_creation }}</td>
+          <td>{{ z.h1_structure_at_creation }}</td>
+          <td>{{ z.fresh_at_creation }}</td>
+          <td>{{ z.first_retest_at or '—' }}</td>
+          <td>{{ z.final_zone_status }}{% if z.primary_rejection_reason %} / {{ z.primary_rejection_reason }}{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="text-muted">No zone audit (older run or missing artifact).</p>{% endif %}
+  </div>
+
+  <div class="card" style="padding:16px;margin-top:14px;overflow:auto;">
+    <h3>Retest audit</h3>
+    {% if detail.v2_retest_audit %}
+    <table class="table" style="width:100%;font-size:.8rem;">
+      <thead>
+        <tr>
+          <th>Zone</th><th>Retest</th><th>Type</th><th>Trigger</th><th>Pivot conf</th>
+          <th>Wick</th><th>Close</th><th>Bars</th><th>MFE</th><th>MAE</th><th>Reason</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in detail.v2_retest_audit %}
+        <tr>
+          <td title="{{ r.zone_id }}">{{ r.zone_id[-20:] }}</td>
+          <td>{{ r.zone_retest_at }}</td>
+          <td>{{ r.zone_type }}</td>
+          <td>{{ r.trigger_pivot_price or '—' }}</td>
+          <td>{{ r.trigger_pivot_confirmed_at or '—' }}</td>
+          <td>{{ r.wick_broke_trigger }}</td>
+          <td>{{ r.close_broke_trigger }}</td>
+          <td>{{ r.bars_to_confirmation if r.bars_to_confirmation is not none else r.m15_bars_observed }}</td>
+          <td>{{ r.mfe_pips }}</td>
+          <td>{{ r.mae_pips }}</td>
+          <td>{{ r.primary_reason }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}<p class="text-muted">No retest audit.</p>{% endif %}
+  </div>
+  {% endif %}
+
+  {% if detail.has_geometry_diagnostics %}
+  <div class="card" style="padding:16px;margin-top:14px;">
+    <h3>Geometry diagnostics <span class="badge" style="background:#6c757d;color:#fff;font-size:.7rem;">DIAGNOSTIC ONLY</span></h3>
+    {% set geo_cands = detail.v2_geometry_decomposition or [] %}
+    {% if geo_cands %}
+    {% for g in geo_cands %}
+    <div style="border:1px solid #333;margin-bottom:12px;padding:10px;font-size:.85rem;">
+      <strong>{{ g.strategy }}</strong> · {{ g.zone_id[-28:] }} · {{ g.direction }}
+      <table class="table" style="width:100%;margin-top:8px;">
+        <thead><tr><th></th><th>Entry</th><th>SL</th><th>TP</th><th>Risk</th><th>Reward</th><th>RR</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>CURRENT</td>
+            <td>{{ g.CURRENT_GEOMETRY.entry }}</td>
+            <td>{{ g.CURRENT_GEOMETRY.current_sl }}</td>
+            <td>{{ g.CURRENT_GEOMETRY.current_tp }}</td>
+            <td>{{ g.CURRENT_GEOMETRY.current_risk }}</td>
+            <td>{{ g.CURRENT_GEOMETRY.current_reward }}</td>
+            <td>{{ g.CURRENT_GEOMETRY.current_rr }}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="grid-3" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px;">
+        <div>
+          <strong>ENTRY EFFECT</strong><br>
+          Best earlier: {{ g.entry_delay.best_earlier_entry_variant }}<br>
+          RR: {{ g.entry_delay.rr_at_best_earlier_entry }} · Δ {{ g.entry_delay.rr_delta }}<br>
+          Pass 1.4: {{ g.MIN_RR_CROSSING.entry_only_pass }}
+        </div>
+        <div>
+          <strong>SL EFFECT</strong><br>
+          Best: {{ g.ROOT_CAUSE_EVIDENCE.best_sl_variant }}<br>
+          Δ {{ g.ROOT_CAUSE_EVIDENCE.delta_RR_sl }}<br>
+          Pass 1.4: {{ g.MIN_RR_CROSSING.sl_only_pass }}
+        </div>
+        <div>
+          <strong>TP EFFECT</strong><br>
+          Best: {{ g.ROOT_CAUSE_EVIDENCE.best_tp_variant }}<br>
+          Δ {{ g.ROOT_CAUSE_EVIDENCE.delta_RR_tp }}<br>
+          Pass 1.4: {{ g.MIN_RR_CROSSING.tp_only_pass }}
+        </div>
+      </div>
+      <p style="margin-top:8px;"><strong>ROOT CAUSE:</strong> {{ g.ROOT_CAUSE }}
+        (Entry Δ {{ g.ROOT_CAUSE_EVIDENCE.delta_RR_entry }}, SL Δ {{ g.ROOT_CAUSE_EVIDENCE.delta_RR_sl }}, TP Δ {{ g.ROOT_CAUSE_EVIDENCE.delta_RR_tp }})
+      </p>
+      <p><strong>Required TP @ 1.4R:</strong> {{ g.CURRENT_GEOMETRY.required_tp_at_min_rr }}
+        · Shortfall: {{ g.CURRENT_GEOMETRY.target_shortfall_price }} · Pass: {{ g.CURRENT_GEOMETRY.passes_min_rr|fmt_metric('bool') }}</p>
+      <details><summary>Show calculation</summary>
+        {% if g.CURRENT_GEOMETRY.literal_formulas and g.CURRENT_GEOMETRY.literal_formulas.lines %}
+        <pre style="font-size:.75rem;">{% for line in g.CURRENT_GEOMETRY.literal_formulas.lines %}{{ line }}\n{% endfor %}</pre>
+        {% endif %}
+      </details>
+      <p class="text-muted" style="font-size:.75rem;">Earlier-entry RR is OBSERVATIONAL ONLY — not a valid strategy entry.</p>
+      {% set decay = (detail.v2_geometry_decay | selectattr('zone_id', 'equalto', g.zone_id) | list | first) %}
+      {% if decay %}
+      <p><strong>RR decay:</strong> retest {{ decay.RR_at_retest }} → best {{ decay.RR_best_before_confirmation }} → confirm {{ decay.RR_at_confirmation }} (Δ {{ decay.RR_decay_absolute }})</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+    {% if detail.v2_geometry_matrix %}
+    <details style="margin-top:10px;">
+      <summary>RR matrix (compact)</summary>
+      <table class="table" style="width:100%;font-size:.75rem;margin-top:8px;">
+        <thead><tr><th>Zone</th><th>E</th><th>S</th><th>T</th><th>RR</th><th>Valid</th><th>≥1.4</th></tr></thead>
+        <tbody>
+        {% for m in detail.v2_geometry_matrix[:40] %}
+          <tr>
+            <td>{{ m.zone_id[-16:] }}</td>
+            <td>{{ m.entry_variant }}</td>
+            <td>{{ m.sl_variant }}</td>
+            <td>{{ m.tp_variant }}</td>
+            <td>{{ m.rr }}</td>
+            <td>{{ m.chronologically_valid|fmt_metric('bool') }}</td>
+            <td>{{ m.passes_min_rr|fmt_metric('bool') }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </details>
+    {% endif %}
+    {% else %}<p class="text-muted">No geometry decomposition rows.</p>{% endif %}
+  </div>
+  {% endif %}
+
+  <p style="margin-top:14px;"><a href="{{ base_path }}/backtests">← All runs</a></p>
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if detail and detail.equity_curve %}
+<script>
+(() => {
+  const eq = {{ detail.equity_curve | tojson }};
+  const labels = eq.map(r => r.timestamp || r.time || '');
+  const equity = eq.map(r => Number(r.equity || r.balance || 0));
+  new Chart(document.getElementById('eqChart'), {
+    type: 'line',
+    data: { labels, datasets: [{ label: 'Equity', data: equity, borderColor: '#C9A227', tension: .2, pointRadius: 0 }] },
+    options: { plugins: { legend: { display: false } }, scales: { x: { display: false } } }
+  });
+})();
+</script>
+{% endif %}
+{% if detail and detail.monthly %}
+<script>
+(() => {
+  const mo = {{ detail.monthly | tojson }};
+  new Chart(document.getElementById('moChart'), {
+    type: 'bar',
+    data: {
+      labels: mo.map(r => r.month),
+      datasets: [{ label: 'P/L', data: mo.map(r => Number(r.pnl || 0)), backgroundColor: '#C9A227' }]
+    },
+    options: { plugins: { legend: { display: false } } }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

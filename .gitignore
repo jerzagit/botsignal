@@ -2,6 +2,11 @@
 .env
 data/session*
 
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
 # Logs and data
 logs/
 data/trades.json
@@ -10,15 +15,31 @@ data/startup.timestamp
 data/processed_updates.json
 data/manual_trade_guard.json
 data/service_locks/
+data/backtests/datasets/*/
+!data/backtests/datasets/README.md
+data/backtests/BT_*/
+data/backtests/broker_specs/
+
+# Backup / export scratch
+backup/
+backups/
+exports/
+*.bak
+*.backup
+
 dash_*.log
 bot_*.log
 
 # Python
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *.egg-info/
 .venv/
 venv/
+
+# Local tooling
+.claude/
 
 # Temp / scratch files
 check_py.py

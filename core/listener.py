@@ -110,8 +110,12 @@ async def start_listener():
             f"- `{source.source_id}` {title} ({source.risk_percent*100:.1f}% risk, {mode})"
         )
 
-    from core.config import ENV_MODE
-    env_label = "🔴 LIVE" if ENV_MODE == "live" else "🟢 DEMO (UAT)"
+    from core.config import ENV_MODE, IS_LIVE_MODE
+    if IS_LIVE_MODE:
+        slot = {"live": "1", "live2": "2", "live3": "3"}.get(ENV_MODE, "?")
+        env_label = f"🔴 LIVE-{slot}"
+    else:
+        env_label = "🟢 DEMO (UAT)"
     me = await client.get_me()
     await bot.send_message(
         chat_id=YOUR_CHAT_ID,

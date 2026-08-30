@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}SignalBot — Strategies{% endblock %}
+{% set active_nav = 'strategies' %}
+
+{% block content %}
+  <div class="page-header">
+    <h1>Strategies</h1>
+    <p>Registry-driven plugins. Live trading uses the runtime strategy until bot restart.</p>
+  </div>
+
+  {% if message %}<div class="alert alert-success">{{ message }}</div>{% endif %}
+  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+  <div class="grid-2" style="margin-bottom:16px;">
+    <div class="card" style="padding:18px;">
+      <div class="text-muted" style="font-size:.8rem;">Runtime strategy</div>
+      <div style="font-size:1.15rem;font-weight:600;margin-top:4px;">{{ runtime }}</div>
+    </div>
+    <div class="card" style="padding:18px;">
+      <div class="text-muted" style="font-size:.8rem;">Configured strategy (.env)</div>
+      <div style="font-size:1.15rem;font-weight:600;margin-top:4px;">{{ configured }}</div>
+      {% if restart_required %}
+      <div class="badge" style="margin-top:8px;background:#FEF3C7;color:#92400E;">Restart required</div>
+      {% else %}
+      <div class="badge" style="margin-top:8px;background:#D1FAE5;color:#065F46;">In sync</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card" style="padding:18px;margin-bottom:16px;">
+    <form method="post" action="{{ base_path }}/strategies" style="display:flex;flex-wrap:wrap;gap:12px;align-items:end;">
+      <div style="flex:1;min-width:220px;">
+        <label class="form-label" for="ACTIVE_STRATEGY">Active strategy (save to configure)</label>
+        <select id="ACTIVE_STRATEGY" name="ACTIVE_STRATEGY" class="form-control">
+          {% for s in strategies %}
+          <option value="{{ s.name }}" {% if s.name == configured %}selected{% endif %}>
+            {{ s.display_name }} ({{ s.name }}) — {{ s.status }}
+          </option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary">Save / Apply config</button>
+    </form>
+    <p class="form-help" style="margin-top:10px;">Does not hot-swap mid-scan. Bot restart required for runtime change.</p>
+  </div>
+
+  <div class="card" style="padding:18px;margin-bottom:16px;">
+    <div style="display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;">
+      <div>
+        <div style="font-weight:600;">Python service — SignalBot</div>
+        <p class="text-muted" style="margin:4px 0 0;font-size:.9rem;">
+          Restarts <code>bot.py</code> only (Windows service <code>SignalBot</code> if installed). Does not close MT5 or the dashboard.
+        </p>
+        {% if bot_status %}
+        <p style="margin:8px 0 0;font-size:.9rem;">
+          Status:
+          <strong>{% if bot_status.running %}Running{% else %}Stopped{% endif %}</strong>
+          · mode {{ bot_status.mode }}
+          {% if bot_status.service_status %}· service {{ bot_status.service_status }}{% endif %}
+          {% if bot_status.pids %}· PID {{ bot_status.pids|join(', ') }}{% endif %}
+        </p>
+        {% endif %}
+      </div>
+      <form method="post" action="{{ base_path }}/system/restart-bot"
+            onsubmit="return confirm('Restart SignalBot Python service now?\n\nThis reloads ACTIVE_STRATEGY and bot code.\nMT5 terminal will NOT be closed.');">
+        <input type="hidden" name="confirm" value="restart">
+        <button type="submit" class="btn btn-primary">Restart Python service</button>
+      </form>
+    </div>
+    {% if restart_result and restart_result.details %}
+    <pre class="text-muted" style="margin-top:12px;font-size:.8rem;white-space:pre-wrap;">{{ restart_result.details|join('\n') }}</pre>
+    {% endif %}
+  </div>
+
+  <div class="card" style="padding:0;overflow:auto;">
+    <table class="data-table" style="width:100%;border-collapse:collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:12px;">Strategy</th>
+          <th style="text-align:left;padding:12px;">Version</th>
+          <th style="text-align:left;padding:12px;">Status</th>
+          <th style="text-align:left;padding:12px;">Required TF</th>
+          <th style="text-align:left;padding:12px;">Active</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in strategies %}
+        <tr>
+          <td style="padding:12px;">
+            <a href="{{ base_path }}/strategies?id={{ s.name }}">{{ s.display_name }}</a>
+            <div class="text-muted" style="font-size:.8rem;">{{ s.name }}</div>
+          </td>
+          <td style="padding:12px;">{{ s.version }}</td>
+          <td style="padding:12px;">{{ s.status }}</td>
+          <td style="padding:12px;">{{ s.required_timeframes|join('/') }}</td>
+          <td style="padding:12px;">{% if s.name == configured %}configured{% endif %}{% if s.name == runtime %}{% if s.name == configured %} · {% endif %}runtime{% endif %}{% if s.name != configured and s.name != runtime %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if detail %}
+  <div class="card" style="padding:18px;margin-top:16px;">
+    <h2 style="margin:0 0 8px;">{{ detail.display_name }}</h2>
+    <p class="text-muted">{{ detail.description }}</p>
+    <div class="grid-3" style="margin-top:12px;">
+      <div><div class="text-muted">Internal id</div><code>{{ detail.name }}</code></div>
+      <div><div class="text-muted">Status</div>{{ detail.status }}</div>
+      <div><div class="text-muted">Timeframes</div>{{ detail.required_timeframes|join(', ') }}</div>
+    </div>
+    {% if detail.name == 'structure_pullback_v2' %}
+    <p style="margin-top:14px;">Rule summary: H4 EMA/RSI bias → H1 structure → M30 RBR/DBD first retest → M15 structure-shift entry. See <code>docs/STRUCTURE_PULLBACK_V2.md</code>.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+{% endblock %}
