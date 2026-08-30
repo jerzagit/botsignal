@@ -1,11 +1,31 @@
--- SignalBot — MySQL schema
--- Auto-executed by Docker on first run (docker-entrypoint-initdb.d)
+-- SignalBot Database Initialization
+-- Fresh installation schema only — no user/runtime data.
+--
+-- Fresh installs:
+--   Execute this file against an empty MySQL instance (or let Docker
+--   apply it via docker-entrypoint-initdb.d). You do NOT need to run
+--   historical migrate_*.sql files afterward — their final definitions
+--   are already incorporated below.
+--
+-- Existing installs:
+--   Keep using db/migrate_*.sql to upgrade older databases.
+--   Do not re-run non-idempotent ALTER migrations after columns exist.
+--
+-- Privacy:
+--   Schema-only. No INSERT of trades, Telegram IDs, MT5 logins, or secrets.
+--
+-- Engine: MySQL 8.x (utf8mb4 / utf8mb4_unicode_ci)
 
 CREATE DATABASE IF NOT EXISTS botsignal
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
 
 USE botsignal;
+
+-- --------------------------------------------------
+-- Core signal / trade tables
+-- (signals before trades: FK trades.signal_id -> signals.signal_id)
+-- --------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS signals (
     signal_id   VARCHAR(64)    PRIMARY KEY,
@@ -37,11 +57,15 @@ CREATE TABLE IF NOT EXISTS trades (
     profit      DECIMAL(10,2),
     closed_at   DATETIME,
     created_at  DATETIME       DEFAULT CURRENT_TIMESTAMP,
-    entry_mode  VARCHAR(12)    DEFAULT NULL,  -- 'layered_dca' | 'direct' | NULL=old data
-    layer_num   TINYINT        DEFAULT NULL,  -- 1,2,3... for DCA layers; NULL for direct
+    entry_mode  VARCHAR(12)    DEFAULT NULL,  -- layered_dca / direct / NULL for legacy rows
+    layer_num   TINYINT        DEFAULT NULL,  -- 1,2,3... for DCA layers (NULL for direct)
     FOREIGN KEY (signal_id) REFERENCES signals(signal_id)
         ON DELETE SET NULL
 );
+
+-- --------------------------------------------------
+-- Mapping / SNR support tables
+-- --------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS snr_levels (
     id          INT            AUTO_INCREMENT PRIMARY KEY,
@@ -68,6 +92,11 @@ CREATE TABLE IF NOT EXISTS mapping_zones (
     INDEX idx_active (valid_date, fired)
 );
 
+-- --------------------------------------------------
+-- Candle / market data tables
+-- (also available via migrate_add_candles.sql for older DBs)
+-- --------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS candles (
     id          INT            AUTO_INCREMENT PRIMARY KEY,
     symbol      VARCHAR(20)    NOT NULL,
@@ -82,6 +111,11 @@ CREATE TABLE IF NOT EXISTS candles (
     UNIQUE KEY uq_candle (symbol, timeframe, candle_time),
     INDEX idx_symbol_tf_time (symbol, timeframe, candle_time)
 );
+
+-- --------------------------------------------------
+-- Guard / audit event tables
+-- (source_id also added historically by migrate_add_signal_sources.sql)
+-- --------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS guard_events (
     id             INT           AUTO_INCREMENT PRIMARY KEY,
