@@ -40,6 +40,8 @@
 5. Check Telegram for **"SignalBot is LIVE!"** from your bot
 6. (Optional) Run `python dashboard/app.py` for the dashboard
 7. (Optional) Run `ngrok http 5000` to access dashboard remotely
+8. (Optional) Run `python record_signals.py` to log every signal/close to `data/signals/YYYY-MM-DD.csv` without trading
+9. (Optional) Run `python basket_tp_watch.py` to auto-close all open positions once floating PnL hits the target
 
 > **First run only:** Telethon asks for your phone number and a Telegram OTP.
 > Enter them once — session saved to `data/session`, never asked again.
@@ -165,6 +167,12 @@ AGENT_START_HOUR_MY=22
 AGENT_END_HOUR_MY=6
 AGENT_AUTO_EXECUTE=false
 AGENT_ENABLED=true
+
+# ── Strategy (auto-entry beside the signal bot) ───────
+ACTIVE_STRATEGY=breakout_retest_v1
+STRATEGY_ENABLED=false              # false = strategy does not place trades
+STRATEGY_MAX_SL_PIPS=0              # max SL distance in pips; 0 = disabled
+                                    # (entries with wider SL are blocked by max_sl_cap)
 ```
 
 ---
@@ -386,6 +394,37 @@ Map SNR levels and buy/sell zones each morning via Telegram. The bot auto-enters
 - Zones expire at midnight Malaysia time
 - Fully automatic — no EXECUTE/SKIP button needed
 - Dashboard shows AutoZone panel with SNR levels and zone status
+
+---
+
+## Signal Recording Only (No Trading)
+
+`python record_signals.py` listens to the configured signal channels and saves every parsed
+signal/close to a daily CSV **without trading**:
+
+```powershell
+python record_signals.py
+```
+
+- Output: `data/signals/YYYY-MM-DD.csv` — fields `timestamp, source_id, source_name, symbol, direction, entry_low, entry_high, sl, tp1, tp2, tps_json, signal_id, raw_text` (plus `outcome` when a close alert is parsed)
+- Uses the same `TG_*` / `SIGNAL_SOURCES` settings as `bot.py`
+- `bot.py` itself also writes to the same daily CSV via `core/signal_recorder.py`
+- No bot account or MySQL needed — only a Telethon session
+- `data/signals/` is gitignored
+
+---
+
+## Basket TP Watcher
+
+`python basket_tp_watch.py` closes **all** open MT5 positions the moment combined floating
+PnL (profit + swap) reaches the target:
+
+```powershell
+python basket_tp_watch.py
+```
+
+- `TARGET_USD` / `CHECK_INTERVAL` are hard-coded at the top of the file (default `+$200`, every 5 s)
+- Independent of the bot — no guards, commands, or database involved
 
 ---
 

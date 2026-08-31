@@ -15,6 +15,7 @@ data/startup.timestamp
 data/processed_updates.json
 data/manual_trade_guard.json
 data/service_locks/
+data/signals/
 data/backtests/datasets/*/
 !data/backtests/datasets/README.md
 data/backtests/BT_*/

@@ -20,6 +20,7 @@ from core.config import (
     SL_PIP_SIZE,
     STACK_MODE,
     STRATEGY_DAILY_DRAWDOWN_PERCENT,
+    STRATEGY_MAX_SL_PIPS,
     STRATEGY_RISK_PERCENT,
     TP_ENFORCE_PIPS,
 )
@@ -417,6 +418,49 @@ def evaluate_strategy_guards(
             },
         )
     )
+    if failed:
+        skip_rest(
+            [
+                "symbol_available",
+                "tick_available",
+                "spread",
+                "proximity",
+                "lot_calc",
+                "source_risk",
+            ]
+        )
+        return GuardTrace(
+            guards=guards,
+            final="BLOCKED",
+            blocked_by=blocked_by,
+            effective_tps=[effective_tp],
+            rr_after_adjust=rr_ratio,
+        )
+
+    # max SL cap
+    if STRATEGY_MAX_SL_PIPS > 0:
+        sl_pips_actual = sl_distance / SL_PIP_SIZE if SL_PIP_SIZE > 0 else 0
+        ok = sl_pips_actual <= STRATEGY_MAX_SL_PIPS
+        add(
+            GuardResult(
+                "max_sl_cap",
+                RESULT_PASS if ok else RESULT_FAIL,
+                QUALITY_EXACT,
+                {
+                    "sl_pips": round(sl_pips_actual, 2),
+                    "max_sl_pips": STRATEGY_MAX_SL_PIPS,
+                },
+            )
+        )
+    else:
+        add(
+            GuardResult(
+                "max_sl_cap",
+                RESULT_PASS,
+                QUALITY_NOT_APPLICABLE,
+                {"note": "disabled (STRATEGY_MAX_SL_PIPS=0)"},
+            )
+        )
     if failed:
         skip_rest(
             [
