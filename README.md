@@ -132,7 +132,7 @@ Variable groups (names only; fill your own values):
 | Telegram | `TG_API_ID`, `TG_API_HASH`, `BOT_TOKEN`, `YOUR_CHAT_ID`, `SIGNAL_GROUP`, optional `SIGNAL_SOURCES` |
 | MT5 | `MT5_PATH`, `DEMO_*` / `LIVE_*` login fields, suffixes, spread caps |
 | Database | `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD` |
-| Strategy | `ACTIVE_STRATEGY`, `STRATEGY_ENABLED`, `STRATEGY_LIVE_UNLOCKED`, symbol/TF/risk knobs |
+| Strategy | `ACTIVE_STRATEGY`, `STRATEGY_ENABLED`, `STRATEGY_LIVE_UNLOCKED`, `STRATEGY_MAX_SL_PIPS`, symbol/TF/risk knobs |
 
 Backtest safety env (set when running replay/download — not the same as `ENV_MODE`):
 
@@ -246,6 +246,38 @@ Or PowerShell helper (starts `bot.py` if not already running):
 
 ---
 
+## Signal Recording Only (No Trading)
+
+`record_signals.py` runs a **recording-only** listener: it joins the configured Telegram
+chat(s), parses incoming signals and close alerts with the same parsers, and writes them
+to a daily CSV. It never places trades and needs no bot account / MySQL — just a
+Telethon session and the `TG_*` / `SIGNAL_SOURCES` settings.
+
+```powershell
+python record_signals.py
+```
+
+- Output: `data/signals/YYYY-MM-DD.csv`
+- Fields: `timestamp, timestamp_utc, source_id, source_name, symbol, direction, entry_low, entry_high, sl, tp1, tp2, tps_json, signal_id, raw_text` (plus `outcome` filled in when a close alert is parsed).
+- The full bot (`python bot.py`) also logs every signal/close to the same daily CSV via `core/signal_recorder.py`, so you get a side-by-side paper trail.
+- `data/signals/` is gitignored — do not commit recorded signals.
+
+---
+
+## Basket TP Watcher
+
+`basket_tp_watch.py` is a small standalone monitor that closes **all** open MT5 positions
+when combined floating PnL (profit + swap) reaches a target.
+
+```powershell
+python basket_tp_watch.py
+```
+
+- `TARGET_USD` and `CHECK_INTERVAL` are hard-coded at the top of the file (defaults: `+$200`, every 5 s).
+- Completely independent of the bot — no guards, commands, or database involved. Use it as a manual "take the whole basket off" helper on top of a live MT5 position set.
+
+---
+
 ## Strategy Plugins
 
 Package: `core/strategies/`  
@@ -259,6 +291,17 @@ STRATEGY_ENABLED=false
 ```
 
 Restart the bot / dashboard processes after changing `ACTIVE_STRATEGY`.
+
+Key strategy risk knobs (`core/config.py`):
+
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `STRATEGY_RISK_PERCENT` | `RISK_PERCENT` | % equity risked per strategy entry |
+| `STRATEGY_TP_R_MULTIPLE` | `1.5` | TP distance as a multiple of SL distance |
+| `STRATEGY_MAX_SL_PIPS` | `0` | hard cap on SL distance in pips; entries with a wider SL are blocked (`0` = disabled) |
+
+The `max_sl_cap` guard (`backtest/guards.py`) applies `STRATEGY_MAX_SL_PIPS` to every
+strategy candidate; a wider SL marks the candidate `BLOCKED` before lot/spread checks.
 
 ### Available Strategies
 
@@ -436,6 +479,7 @@ Intentionally excluded (see `.gitignore`):
 | `data/backtests/datasets/*/` | Large broker history |
 | `data/backtests/BT_*/` | Generated run artifacts |
 | `data/backtests/broker_specs/` | Account-linked broker captures |
+| `data/signals/` | Daily recorded-signal CSVs |
 | `*.db`, `*.sqlite`, `*.sqlite3` | Local databases |
 | `logs/`, `*.log` | Runtime logs |
 | `.pytest_cache/`, `__pycache__/` | Caches |
@@ -482,6 +526,8 @@ Another developer must create `.env`, initialize MySQL, and obtain/download thei
 | [docs/BACKTEST_GUARD_MATRIX.md](docs/BACKTEST_GUARD_MATRIX.md) | Guard matrix |
 | [docs/BACKTEST_TIMEZONE.md](docs/BACKTEST_TIMEZONE.md) | Candle time basis |
 | [docs/BACKTEST_READINESS_REPORT.md.txt](docs/BACKTEST_READINESS_REPORT.md.txt) | Readiness report |
+| [docs/GUARDS.md](docs/GUARDS.md) | Complete guard & trade-logic reference (production values) |
+| [docs/pipeline_diagram.png](docs/pipeline_diagram.png) | Signal → guard → execute pipeline diagram |
 
 ---
 

@@ -23,6 +23,7 @@ from core.state import pending
 from core.notifier import send_close_confirmation, get_bot
 from core.watcher import watch_and_execute
 from core.layer_watcher import watch_layered_entry
+from core.signal_recorder import record_signal, record_close
 
 log = logging.getLogger(__name__)
 
@@ -151,6 +152,10 @@ async def start_listener():
             )
             log.info("Close alert detected [%s]: %s symbol=%s",
                      source.source_id, reason_label, alert.symbol)
+            record_close(
+                signal_id=f"{source.source_id}_close",
+                reason=alert.reason,
+            )
             await send_close_confirmation(bot, alert)
             return
 
@@ -170,6 +175,19 @@ async def start_listener():
         log.info(
             "Signal detected [%s]: %s %s -> %s",
             source.source_id, signal.symbol, signal.direction.upper(), signal_id
+        )
+
+        record_signal(
+            source_id=source.source_id,
+            source_name=source.name,
+            symbol=signal.symbol,
+            direction=signal.direction,
+            entry_low=signal.entry_low,
+            entry_high=signal.entry_high,
+            sl=signal.sl,
+            tps=signal.tps,
+            signal_id=signal_id,
+            raw_text=text,
         )
 
         from core.db import upsert_signal
